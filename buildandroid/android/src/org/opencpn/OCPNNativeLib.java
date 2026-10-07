@@ -42,4 +42,10 @@ public class OCPNNativeLib {
 
   public native int onSoundDone(long androidSoundPtr);
 
+  /**
+   * Forward of Activity.onTrimMemory(level). The native side sheds GL
+   * texture memory (crunch on MODERATE, clear on COMPLETE).
+   */
+  public native int onTrimMemory(int level);
+
 }

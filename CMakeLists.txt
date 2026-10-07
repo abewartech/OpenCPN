@@ -2886,6 +2886,10 @@ file(WRITE "${CMAKE_BINARY_DIR}/run_tests.cmake" ${_run_tests})
 if (OCPN_BUILD_TEST)
   add_subdirectory(libs/gtest)
   add_subdirectory(test)
+  if (NOT QT_ANDROID)
+    # Host-only unit tests for Android chart/storage logic (pure C++17).
+    add_subdirectory(android/tests)
+  endif ()
   add_custom_target(
     run-tests
     COMMAND cmake -P "${CMAKE_BINARY_DIR}/run_tests.cmake"

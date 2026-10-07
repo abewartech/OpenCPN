@@ -3,4 +3,21 @@
     <style name="NoActionBar" parent="@android:style/Theme.Holo.NoActionBar">
         <!-- Inherits the Holo theme with no action bar; no other styles needed. -->
     </style>
+
+    <!--
+      Modern application theme. Material base with no action bar; the Qt/wx
+      canvas draws its own chrome. Edge-to-edge is enabled at runtime for
+      API 29+ (see QtActivity); the status/navigation bars are translucent so
+      the chart can extend under them while insets keep controls reachable.
+    -->
+    <style name="Theme.OCPN" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowTranslucentStatus">true</item>
+        <item name="android:windowTranslucentNavigation">true</item>
+        <item name="android:windowSoftInputMode">adjustResize</item>
+        <item name="android:windowNoTitle">true</item>
+    </style>
+
+    <style name="Theme.OCPN.NoTitleBar" parent="Theme.OCPN">
+        <item name="android:windowNoTitle">true</item>
+    </style>
 </resources>

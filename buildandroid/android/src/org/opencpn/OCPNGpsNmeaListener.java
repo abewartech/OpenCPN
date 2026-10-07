@@ -1,48 +1,34 @@
 package org.opencpn;
 
-import android.app.AlertDialog;
-import android.app.Service;
-import android.content.Context;
-import android.content.DialogInterface;
-import android.content.Intent;
-import android.location.Location;
-import android.location.LocationListener;
-import android.location.LocationManager;
-import android.location.GpsStatus;
-import android.location.GpsStatus.NmeaListener;
-import android.os.Bundle;
-import android.os.IBinder;
-import android.os.HandlerThread;
-import android.provider.Settings;
+import android.location.OnNmeaMessageListener;
 import android.util.Log;
 
 import org.opencpn.OCPNNativeLib;
-import org.opencpn.GPSServer;
 
-public class OCPNGpsNmeaListener implements GpsStatus.NmeaListener{
+/**
+ * Forwards raw NMEA sentences from Android's GNSS stack to the native layer.
+ *
+ * <p>Uses {@link OnNmeaMessageListener} (API 24+). The old
+ * {@code GpsStatus.NmeaListener} was deprecated in API 24 and must not be used
+ * with minSdk 24+.
+ */
+public class OCPNGpsNmeaListener implements OnNmeaMessageListener {
 
-    OCPNNativeLib mNativeLib;
-    GPSServer mserver;
+    private static final String TAG = "OCPN-NMEA";
 
-    public OCPNGpsNmeaListener(OCPNNativeLib nativelib, GPSServer server) {
+    private final OCPNNativeLib mNativeLib;
+
+    public OCPNGpsNmeaListener(OCPNNativeLib nativelib) {
         this.mNativeLib = nativelib;
-        this.mserver = server;
     }
-
 
     @Override
-    public void onNmeaReceived(long timestamp, String nmea) {
-//        Log.i("DEBUGGER_TAG", "onNmeaReceived");
-//        Log.i("DEBUGGER_TAG", nmea);
-
-        // Reset the dog.
-        if(null != mserver)
-            mserver.m_watchDog = 0;
-
-        mNativeLib.processNMEA( nmea );
+    public void onNmeaMessage(String nmea, long timestamp) {
+        if (nmea == null || mNativeLib == null) return;
+        try {
+            mNativeLib.processNMEA(nmea);
+        } catch (Exception e) {
+            Log.w(TAG, "processNMEA failed", e);
+        }
     }
-
-
 }
-
-

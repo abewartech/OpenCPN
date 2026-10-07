@@ -104,6 +104,31 @@
 
 #include "lunasvg.h"
 
+/**
+ * RAII guard for JNI GetStringUTFChars/ReleaseStringUTFChars pairs.
+ * The file historically leaked the pinned UTF chars at ~25 call sites;
+ * use this instead of raw GetStringUTFChars.
+ */
+class JniUtfChars {
+public:
+  JniUtfChars(JNIEnv *env, jstring s) : m_env(env), m_s(s), m_chars(0) {
+    if (m_env && m_s) m_chars = m_env->GetStringUTFChars(m_s, nullptr);
+  }
+  ~JniUtfChars() {
+    if (m_env && m_s && m_chars) m_env->ReleaseStringUTFChars(m_s, m_chars);
+  }
+  JniUtfChars(const JniUtfChars &) = delete;
+  JniUtfChars &operator=(const JniUtfChars &) = delete;
+  const char *get() const { return m_chars ? m_chars : ""; }
+  operator const char *() const { return get(); }
+  bool valid() const { return m_chars != nullptr; }
+
+private:
+  JNIEnv *m_env;
+  jstring m_s;
+  const char *m_chars;
+};
+
 const wxString AndroidSuppLicense = wxT(
     "<br><br>The software included in this product contains copyrighted "
     "software that is licensed under the GPL.")
@@ -354,11 +379,8 @@ wxTransformMatrix g_dummy_transform;
 #define ID_CMD_PERSIST_DATA 5499
 #define SCHEDULED_EVENT_UPDATE_RMD 5500
 
-// Implement a small function missing from Android API 16, or so.
-// FIXME This can go away when Android MIN_SDK is raised to 19 (KitKat)
-int futimens(int fd, const struct timespec times[2]) {
-  return utimensat(fd, nullptr, times, 0);
-}
+// (Removed: futimens() shim for API 16. minSdk is now 24; the NDK provides
+// futimens natively since API 19.)
 
 // Event handler for Raw NMEA messages coming from Java upstream
 class AndroidNMEAEvent : public wxEvent {
@@ -668,7 +690,7 @@ void androidUtilHandler::onTimerEvent(wxTimerEvent &event) {
         if (!s) {
           // qDebug() << "isFileChooserFinished returned null";
         } else if ((jenv)->GetStringLength(s)) {
-          const char *ret_string = (jenv)->GetStringUTFChars(s, NULL);
+          JniUtfChars ret_string((jenv), s);
           //                        qDebug() << "isFileChooserFinished returned
           //                        " << ret_string;
           if (!strncmp(ret_string, "cancel:", 7)) {
@@ -716,7 +738,7 @@ void androidUtilHandler::onTimerEvent(wxTimerEvent &event) {
         if (!s) {
           qDebug() << "isColorPickerDialogFinished returned null";
         } else if ((jenv)->GetStringLength(s)) {
-          const char *ret_string = (jenv)->GetStringUTFChars(s, NULL);
+          JniUtfChars ret_string((jenv), s);
           // qDebug() << "isColorPickerDialogFinished returned " << ret_string;
           if (!strncmp(ret_string, "cancel:", 7)) {
             m_done = true;
@@ -763,7 +785,7 @@ void androidUtilHandler::onTimerEvent(wxTimerEvent &event) {
         if (!s) {
           qDebug() << "checkPostAsync returned null";
         } else if ((jenv)->GetStringLength(s)) {
-          const char *ret_string = (jenv)->GetStringUTFChars(s, NULL);
+          JniUtfChars ret_string((jenv), s);
           qDebug() << "checkPostAsync returned " << ret_string;
           if (strncmp(ret_string, "ACTIVE", 6)) {  // Must be done....
             m_done = true;
@@ -807,7 +829,7 @@ void androidUtilHandler::onTimerEvent(wxTimerEvent &event) {
         if (!s) {
           // qDebug() << "isFileChooserFinished returned null";
         } else if ((jenv)->GetStringLength(s)) {
-          const char *ret_string = (jenv)->GetStringUTFChars(s, NULL);
+          JniUtfChars ret_string((jenv), s);
           // qDebug() << "isFileChooserFinished returned" << ret_string;
           if (!strncmp(ret_string, "cancel:", 7)) {
             m_migratePermissionSetDone = true;
@@ -1122,7 +1144,7 @@ JNIEXPORT void JNICALL Java_org_opencpn_OCPNNativeLib_ImportTmpGPX(
     bool isPersistent) {
   if (!g_android_import_active) return;
   wxArrayString file_array;
-  const char *string = env->GetStringUTFChars(filePath, NULL);
+  JniUtfChars string(env, filePath);
   file_array.Add(wxString(string));
   ImportFileArray(file_array, g_android_import_islayer,
                   g_android_import_ispersistent, "");
@@ -1289,7 +1311,7 @@ JNIEXPORT jint JNICALL Java_org_opencpn_OCPNNativeLib_processNMEA(
   //  are defined or enabled. But we may get synthesized messages from the Java
   //  app, even without a definite connection.  We ignore these messages.
 
-  const char *string = env->GetStringUTFChars(nmea_string, NULL);
+  JniUtfChars string(env, nmea_string);
 
   // qDebug() << "ProcessNMEA: " << string;
 
@@ -1310,7 +1332,7 @@ JNIEXPORT jint JNICALL Java_org_opencpn_OCPNNativeLib_processNMEAInt(
   //  app, even without a definite connection.  We ignore these messages.
   wxEvtHandler *consumer = s_pAndroidGPSIntMessageConsumer;
 
-  const char *string = env->GetStringUTFChars(nmea_string, NULL);
+  JniUtfChars string(env, nmea_string);
 
   // qDebug() << "ProcessNMEA: " << string;
 
@@ -1335,7 +1357,7 @@ JNIEXPORT jint JNICALL Java_org_opencpn_OCPNNativeLib_processBTNMEA(
     JNIEnv *env, jobject obj, jstring nmea_string) {
   wxEvtHandler *consumer = s_pAndroidBTNMEAMessageConsumer;
 
-  const char *string = env->GetStringUTFChars(nmea_string, NULL);
+  JniUtfChars string(env, nmea_string);
 
   // qDebug() << "ProcessBT: " << string;
 
@@ -1364,7 +1386,7 @@ JNIEXPORT jint JNICALL Java_org_opencpn_OCPNNativeLib_processARBNMEA(
   //  app, even without a definite connection.  We ignore these messages.
   wxEvtHandler *consumer = g_androidUtilHandler;
 
-  const char *string = env->GetStringUTFChars(nmea_string, NULL);
+  JniUtfChars string(env, nmea_string);
 
   qDebug() << "processARBNMEA: " << string;
 
@@ -1611,7 +1633,6 @@ JNIEXPORT jint JNICALL Java_org_opencpn_OCPNNativeLib_selectChartDisplay(
 extern "C" {
 JNIEXPORT jint JNICALL Java_org_opencpn_OCPNNativeLib_invokeCmdEventCmdString(
     JNIEnv *env, jobject obj, int cmd_id, jstring s) {
-  const char *sparm;
   wxString wx_sparm;
   JNIEnv *jenv;
 
@@ -1621,8 +1642,8 @@ JNIEXPORT jint JNICALL Java_org_opencpn_OCPNNativeLib_invokeCmdEventCmdString(
   if (java_vm->GetEnv((void **)&jenv, JNI_VERSION_1_6) != JNI_OK) {
     // qDebug() << "GetEnv failed.";
   } else {
-    sparm = (jenv)->GetStringUTFChars(s, NULL);
-    wx_sparm = wxString(sparm, wxConvUTF8);
+    JniUtfChars sparm_guard_s((jenv), s);
+    wx_sparm = wxString(sparm_guard_s.get(), wxConvUTF8);
   }
 
   // qDebug() << "invokeCmdEventCmdString" << cmd_id << s;
@@ -1791,7 +1812,6 @@ JNIEXPORT jint JNICALL Java_org_opencpn_OCPNNativeLib_setDownloadStatus(
     JNIEnv *env, jobject obj, int status, jstring url) {
   //        qDebug() << "setDownloadStatus";
 
-  const char *sparm;
   wxString wx_sparm;
   JNIEnv *jenv;
 
@@ -1801,8 +1821,8 @@ JNIEXPORT jint JNICALL Java_org_opencpn_OCPNNativeLib_setDownloadStatus(
   if (java_vm->GetEnv((void **)&jenv, JNI_VERSION_1_6) != JNI_OK) {
     // qDebug() << "GetEnv failed.";
   } else {
-    sparm = (jenv)->GetStringUTFChars(url, NULL);
-    wx_sparm = wxString(sparm, wxConvUTF8);
+    JniUtfChars sparm_guard_url((jenv), url);
+    wx_sparm = wxString(sparm_guard_url.get(), wxConvUTF8);
   }
 
   if (s_bdownloading && wx_sparm.IsSameAs(s_requested_url)) {
@@ -1849,7 +1869,6 @@ JNIEXPORT jint JNICALL Java_org_opencpn_OCPNNativeLib_setDownloadStatus(
 extern "C" {
 JNIEXPORT jint JNICALL Java_org_opencpn_OCPNNativeLib_sendPluginMessage(
     JNIEnv *env, jobject obj, jstring msgID, jstring msg) {
-  const char *sparm;
   wxString MsgID;
   wxString Msg;
   JNIEnv *jenv;
@@ -1860,11 +1879,11 @@ JNIEXPORT jint JNICALL Java_org_opencpn_OCPNNativeLib_sendPluginMessage(
   if (java_vm->GetEnv((void **)&jenv, JNI_VERSION_1_6) != JNI_OK) {
     // qDebug() << "GetEnv failed.";
   } else {
-    sparm = (jenv)->GetStringUTFChars(msgID, NULL);
-    MsgID = wxString(sparm, wxConvUTF8);
+    JniUtfChars sparm_guard_msgID((jenv), msgID);
+    MsgID = wxString(sparm_guard_msgID.get(), wxConvUTF8);
 
-    sparm = (jenv)->GetStringUTFChars(msg, NULL);
-    Msg = wxString(sparm, wxConvUTF8);
+    JniUtfChars sparm_guard_msg((jenv), msg);
+    Msg = wxString(sparm_guard_msg.get(), wxConvUTF8);
   }
 
   SendPluginMessage(MsgID, Msg);
@@ -1980,7 +1999,7 @@ bool androidShowDisclaimer(wxString title, wxString msg) {
   jstring s = data.object<jstring>();
 
   if ((jenv)->GetStringLength(s)) {
-    const char *ret_string = (jenv)->GetStringUTFChars(s, NULL);
+    JniUtfChars ret_string((jenv), s);
     return_string = wxString(ret_string, wxConvUTF8);
   }
 
@@ -2021,7 +2040,7 @@ bool androidShowSimpleOKDialog(std::string title, std::string msg) {
   jstring s = data.object<jstring>();
 
   if ((jenv)->GetStringLength(s)) {
-    const char *ret_string = (jenv)->GetStringUTFChars(s, NULL);
+    JniUtfChars ret_string((jenv), s);
     return_string = wxString(ret_string, wxConvUTF8);
   }
 
@@ -2065,7 +2084,7 @@ bool androidShowSimpleYesNoDialog(wxString title, wxString msg) {
   jstring s = data.object<jstring>();
 
   if ((jenv)->GetStringLength(s)) {
-    const char *ret_string = (jenv)->GetStringUTFChars(s, NULL);
+    JniUtfChars ret_string((jenv), s);
     return_string = wxString(ret_string, wxConvUTF8);
   }
 
@@ -2103,7 +2122,7 @@ bool androidCheckSAFPermission(wxString docID) {
   jstring s = data.object<jstring>();
 
   if ((jenv)->GetStringLength(s)) {
-    const char *ret_string = (jenv)->GetStringUTFChars(s, NULL);
+    JniUtfChars ret_string((jenv), s);
     return_string = wxString(ret_string, wxConvUTF8);
   }
 
@@ -2137,7 +2156,7 @@ bool AndroidDoSAFPermissions() {
     jstring s = data.object<jstring>();
 
     if ((jenv)->GetStringLength(s)) {
-      const char *ret_string = (jenv)->GetStringUTFChars(s, NULL);
+      JniUtfChars ret_string((jenv), s);
       return_string = wxString(ret_string, wxConvUTF8);
     }
 
@@ -2189,7 +2208,7 @@ bool androidInstallPlaystoreHelp() {
   jstring s = data.object<jstring>();
 
   if ((jenv)->GetStringLength(s)) {
-    const char *ret_string = (jenv)->GetStringUTFChars(s, NULL);
+    JniUtfChars ret_string((jenv), s);
     return_string = wxString(ret_string, wxConvUTF8);
   }
 
@@ -2438,7 +2457,7 @@ bool androidGetMemoryStatus(int *mem_total, int *mem_used) {
         qDebug() << "GetEnv failed.";
     }
     else {
-        const char *ret_string = (jenv)->GetStringUTFChars(s, NULL);
+        JniUtfChars ret_string((jenv), s);
         mu = atoi(ret_string);
 
     }
@@ -2478,7 +2497,7 @@ double GetAndroidDisplaySize() {
   if (java_vm->GetEnv((void **)&jenv, JNI_VERSION_1_6) != JNI_OK) {
     // qDebug() << "GetEnv failed.";
   } else {
-    const char *ret_string = (jenv)->GetStringUTFChars(s, NULL);
+    JniUtfChars ret_string((jenv), s);
     return_string = wxString(ret_string, wxConvUTF8);
   }
 
@@ -2640,7 +2659,7 @@ wxSize getAndroidDisplayDimensions(void) {
   if (java_vm->GetEnv((void **)&jenv, JNI_VERSION_1_6) != JNI_OK) {
     // qDebug() << "GetEnv failed.";
   } else {
-    const char *ret_string = (jenv)->GetStringUTFChars(s, NULL);
+    JniUtfChars ret_string((jenv), s);
     return_string = wxString(ret_string, wxConvUTF8);
   }
 
@@ -2788,7 +2807,7 @@ int androidGetVersionCode() {
   if (java_vm->GetEnv((void **)&jenv, JNI_VERSION_1_6) != JNI_OK) {
     // qDebug() << "GetEnv failed.";
   } else {
-    const char *ret_string = (jenv)->GetStringUTFChars(s, NULL);
+    JniUtfChars ret_string((jenv), s);
     return_string = wxString(ret_string, wxConvUTF8);
   }
 
@@ -2823,7 +2842,7 @@ wxString androidGetVersionName() {
   if (java_vm->GetEnv((void **)&jenv, JNI_VERSION_1_6) != JNI_OK) {
     // qDebug() << "GetEnv failed.";
   } else {
-    const char *ret_string = (jenv)->GetStringUTFChars(s, NULL);
+    JniUtfChars ret_string((jenv), s);
     return_string = wxString(ret_string, wxConvUTF8);
   }
 
@@ -2846,6 +2865,20 @@ bool androidDeviceHasGPS() {
     wxLogMessage(_T("Android Device has NO internal GPS"));
   }
   return result;
+}
+
+//  Scoped-storage (API 30+): do we hold All-files access? Needed to scan
+//  user chart directories (CM93 etc.) on shared storage.
+bool androidHasAllFilesAccess() {
+  wxString r = callActivityMethod_vs("CheckAllFilesAccess");
+  return r.IsSameAs(_T("OK"));
+}
+
+void androidRequestAllFilesAccess() {
+  //  Opens the system "All files access" settings page for this app.
+  //  Async: the user grants (or not) and returns to the app.
+  callActivityMethod_vs("RequestAllFilesAccess");
+  wxLogMessage(_T("Requested MANAGE_EXTERNAL_STORAGE via system settings"));
 }
 
 bool androidStartGPS(wxEvtHandler *consumer) {
@@ -2969,7 +3002,7 @@ wxString androidGPSService(int parm) {
   if (java_vm->GetEnv((void **)&jenv, JNI_VERSION_1_6) != JNI_OK) {
     // qDebug() << "GetEnv failed.";
   } else {
-    const char *ret_string = (jenv)->GetStringUTFChars(s, NULL);
+    JniUtfChars ret_string((jenv), s);
     return_string = wxString(ret_string, wxConvUTF8);
   }
 
@@ -3000,7 +3033,7 @@ bool androidDeviceHasBlueTooth() {
   if (java_vm->GetEnv((void **)&jenv, JNI_VERSION_1_6) != JNI_OK) {
     // qDebug() << "GetEnv failed.";
   } else {
-    const char *ret_string = (jenv)->GetStringUTFChars(s, NULL);
+    JniUtfChars ret_string((jenv), s);
     query = wxString(ret_string, wxConvUTF8);
   }
 
@@ -3248,6 +3281,12 @@ int androidFileChooser(wxString *result, const wxString &initDir,
       return wxID_OK;
     }
   } else {
+    //  Shared storage (e.g. /storage/emulated/0/Charts): under scoped storage
+    //  (API 30+) the app needs All-files access to list/scan chart dirs.
+    //  If not granted, send the user to the system settings page first.
+    if (!androidHasAllFilesAccess()) {
+      androidRequestAllFilesAccess();
+    }
     if (g_androidUtilHandler) {
       wxString activityResult;
       activityResult = callActivityMethod_s4s("FileChooserDialog", initDir,
@@ -4843,6 +4882,36 @@ Java_org_opencpn_OCPNNativeLib_ScheduleCleanExit(JNIEnv *env, jobject obj) {
   }
 
   return 1;
+}
+}
+
+// ComponentCallbacks2 levels, mirrored here to avoid a Java-side dependency.
+#define OCPN_TRIM_MEMORY_RUNNING_CRITICAL 15
+#define OCPN_TRIM_MEMORY_UI_HIDDEN 20
+#define OCPN_TRIM_MEMORY_MODERATE 60
+#define OCPN_TRIM_MEMORY_COMPLETE 80
+
+extern "C" {
+JNIEXPORT jint JNICALL Java_org_opencpn_OCPNNativeLib_onTrimMemory(
+    JNIEnv *env, jobject obj, jint level) {
+  // Called on the Android UI thread; hop to the wx main thread before
+  // touching GL resources.
+  if (wxTheApp) {
+    wxTheApp->CallAfter([level]() {
+      if (!g_glTextureManager) return;
+      if (level >= OCPN_TRIM_MEMORY_COMPLETE) {
+        // App is in the LRU kill zone: drop all raster textures. They are
+        // rebuilt on demand when the chart is visible again.
+        g_glTextureManager->ClearAllRasterTextures();
+        wxLogMessage(_T("onTrimMemory(COMPLETE): cleared raster textures"));
+      } else if (level >= OCPN_TRIM_MEMORY_MODERATE) {
+        // Halve texture memory; keeps the visible chart usable.
+        g_glTextureManager->TextureCrunch(0.5);
+        wxLogMessage(_T("onTrimMemory(MODERATE): crunched textures"));
+      }
+    });
+  }
+  return 0;
 }
 }
 

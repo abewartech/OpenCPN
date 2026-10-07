@@ -1,540 +1,502 @@
 package org.opencpn;
 
-import android.app.AlertDialog;
+import android.app.Activity;
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
-import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.content.pm.ServiceInfo;
+import android.location.GnssStatus;
 import android.location.Location;
 import android.location.LocationListener;
 import android.location.LocationManager;
-import android.location.GpsStatus;
-import android.location.GpsSatellite;
-
+import android.location.OnNmeaMessageListener;
+import android.os.Build;
 import android.os.Bundle;
-import android.os.IBinder;
+import android.os.Handler;
 import android.os.HandlerThread;
+import android.os.IBinder;
 import android.os.SystemClock;
 import android.provider.Settings;
 import android.util.Log;
-import android.app.Activity;
-import android.os.Handler;
-import java.util.List;
-import java.lang.Math;
-import java.lang.Iterable;
-import java.util.Iterator;
 
 import org.opencpn.OCPNGpsNmeaListener;
 import org.opencpn.OCPNNativeLib;
-import org.qtproject.qt5.android.bindings.QtActivity;
+import org.opencpn.opencpn.R;
 
+import java.lang.ref.WeakReference;
+import java.util.List;
+import java.util.Locale;
 
+/**
+ * GPS/NMEA tracking as a real Android foreground service.
+ *
+ * <p>Historical note: this class used to be instantiated with {@code new
+ * GPSServer(...)} as a plain object and was never declared in the manifest,
+ * so location updates silently stopped whenever the Activity was backgrounded
+ * (Android 8+ kills background location access). It is now a proper
+ * {@link Service} declared in AndroidManifest.xml with
+ * {@code foregroundServiceType="location"}. The legacy {@code doService(int)}
+ * entry point used by the native layer is preserved.
+ *
+ * <p>Uses only non-deprecated APIs (minSdk 24): {@link GnssStatus.Callback}
+ * instead of the removed {@code GpsStatus} listener, and
+ * {@link android.location.OnNmeaMessageListener} instead of the deprecated
+ * {@code GpsStatus.NmeaListener}.
+ */
+public class GPSServer extends Service {
 
-public class GPSServer extends Service implements LocationListener {
+    private static final String TAG = "OCPN-GPS";
 
-    private final static int GPS_OFF = 0;
-    private final static int GPS_ON = 1;
-    public  final static int GPS_PROVIDER_AVAILABLE = 2;
-    private final static int GPS_SHOWPREFERENCES = 3;
+    /** Intent actions for {@link #start(Context, String)}. */
+    public static final String ACTION_START = "org.opencpn.action.GPS_START";
+    public static final String ACTION_STOP = "org.opencpn.action.GPS_STOP";
 
-    private final Context mContext;
-    private final Activity parent_activity;
+    // Legacy command codes, kept for the native/JNI bridge (doService).
+    public static final int GPS_OFF = 0;
+    public static final int GPS_ON = 1;
+    public static final int GPS_PROVIDER_AVAILABLE = 2;
+    public static final int GPS_SHOWPREFERENCES = 3;
 
-    public String status_string;
+    private static final String CHANNEL_ID = "ocpn_gps_tracking";
+    private static final int NOTIF_ID = 1001;
 
-    boolean isThreadStarted = false;
-    HandlerThread mLocationHandlerThread;
+    private static final long MIN_TIME_MS = 1000;      // 1 s between fixes
+    private static final float MIN_DISTANCE_M = 1.0f; // 1 m
+    private static final long STALE_AFTER_MS = 15000; // no fix for 15 s => stale
 
-    OCPNGpsNmeaListener mNMEAListener;
-    OCPNNativeLib mNativeLib;
+    /** The running instance, set in {@link #onCreate()}. */
+    private static volatile GPSServer sInstance;
+    private static final Object sInstanceLock = new Object();
 
-    // flag for GPS status
-    boolean isGPSEnabled = false;
+    private LocationManager locationManager;
+    private OCPNNativeLib nativeLib;
+    private WeakReference<Activity> activityRef;
 
-    // flag for network status
-    boolean isNetworkEnabled = false;
+    private final Object lock = new Object();
+    private boolean tracking = false;
+    private boolean hasFix = false;
+    private long lastFixElapsedMs = 0;
+    private boolean staleReported = false;
 
-    // flag for GPS status
-    boolean canGetLocation = false;
+    private volatile double latitude;
+    private volatile double longitude;
+    private volatile float course;
+    private volatile float speed;
 
-    Location mLastLocation; // location
-    double latitude; // latitude
-    double longitude; // longitude
-    float course;
-    float speed;
-
-    private GpsStatus mStatus;
-    private MyListener mMyListener;
-    long mLastLocationMillis;
-    boolean isGPSFix = false;
-    public int m_watchDog = 0;
-
-    int m_tick;
-
-    // The minimum distance to change Updates in meters
-    private static final long MIN_DISTANCE_CHANGE_FOR_UPDATES = 1; // 1 meter
-
-    // The minimum time between updates in milliseconds
-    private static final long MIN_TIME_BW_UPDATES = 1000; // 1 second
-
-    // Declaring a Location Manager
-    protected LocationManager locationManager;
-
-    private class MyListener implements GpsStatus.Listener {
+    private HandlerThread workerThread;
+    private Handler workerHandler;
+    private GnssStatus.Callback gnssCallback;
+    private OnNmeaMessageListener nmeaListener;
+    private final LocationListener locationListener = new LocationListener() {
         @Override
-        public void onGpsStatusChanged(int event) {
-//            Log.i("DEBUGGER_TAG", "StatusListener Event");
-
-            if(null != locationManager){
-                mStatus = locationManager.getGpsStatus(mStatus);
+        public void onLocationChanged(Location location) {
+            if (location == null) return;
+            latitude = location.getLatitude();
+            longitude = location.getLongitude();
+            if (location.hasBearing()) course = location.getBearing();
+            if (location.hasSpeed()) speed = location.getSpeed();
+            lastFixElapsedMs = SystemClock.elapsedRealtime();
+            staleReported = false;
+            hasFix = true;
+            if (nativeLib != null) {
+                nativeLib.processNMEA(createRMC(true));
             }
+        }
 
+        @Override public void onProviderEnabled(String provider) {
+            Log.i(TAG, "provider enabled: " + provider);
+        }
 
-            switch (event) {
-                case GpsStatus.GPS_EVENT_STARTED:
-                    Log.i("DEBUGGER_TAG", "GPS_EVENT_STARTED Event");
+        @Override public void onProviderDisabled(String provider) {
+            Log.i(TAG, "provider disabled: " + provider);
+            hasFix = false;
+        }
+
+        @Override public void onStatusChanged(String provider, int status, Bundle extras) {}
+    };
+
+    /** Required no-arg constructor for system instantiation. */
+    public GPSServer() {}
+
+    /**
+     * Legacy constructor kept for source compatibility. Prefer
+     * {@link #obtain(Context, OCPNNativeLib, Activity)}.
+     */
+    @Deprecated
+    public GPSServer(Context context, OCPNNativeLib nativelib, Activity activity) {
+        wire(nativelib, activity);
+    }
+
+    /** Attach the native bridge and (optionally) the Activity for UI prompts. */
+    public void wire(OCPNNativeLib nativelib, Activity activity) {
+        this.nativeLib = nativelib;
+        this.activityRef = activity != null ? new WeakReference<>(activity) : null;
+    }
+
+    /**
+     * Start the foreground service (if needed), wire the native bridge, and
+     * return the running instance. Safe to call repeatedly. Waits (bounded,
+     * off the UI thread) for the service to publish its instance.
+     */
+    public static GPSServer obtain(Context context, OCPNNativeLib nativelib,
+                                   Activity activity) {
+        Intent intent = new Intent(context, GPSServer.class)
+                .setAction(ACTION_START);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            context.startForegroundService(intent);
+        } else {
+            context.startService(intent);
+        }
+        // The instance is published in onCreate(); wait for it with a bound.
+        synchronized (sInstanceLock) {
+            long deadline = SystemClock.uptimeMillis() + 2000;
+            while (sInstance == null) {
+                long remaining = deadline - SystemClock.uptimeMillis();
+                if (remaining <= 0) break;
+                try {
+                    sInstanceLock.wait(remaining);
+                } catch (InterruptedException ignored) {
                     break;
-
-                case GpsStatus.GPS_EVENT_STOPPED:
-                    Log.i("DEBUGGER_TAG", "GPS_EVENT_STOPPED Event");
-                    isGPSFix = false;
-                    break;
-
-                case GpsStatus.GPS_EVENT_FIRST_FIX:
-                    Log.i("DEBUGGER_TAG", "GPS_EVENT_FIRST_FIX Event");
-                    isGPSFix = true;
-                    break;
-
-                case GpsStatus.GPS_EVENT_SATELLITE_STATUS:
-//                    Log.i("DEBUGGER_TAG", "GPS_EVENT_SATELLITE_STATUS Event");
-
-                        int nSatsUsed = 0;
-                         // int maxSatellites = gpsStatus.getMaxSatellites();    // appears fixed at 255
-                         Iterable<GpsSatellite>satellites = mStatus.getSatellites();
-                         Iterator<GpsSatellite>satI = satellites.iterator();
-                         while (satI.hasNext()) {
-                             GpsSatellite satellite = satI.next();
-//                             Log.i("DEBUGGER_TAG", "onGpsStatusChanged(): " + satellite.getPrn() + "," + satellite.usedInFix() + "," + satellite.getSnr() + "," + satellite.getAzimuth() + "," + satellite.getElevation());
-                             if(satellite.usedInFix())
-                             nSatsUsed++;
-                         }
-
-                    if(nSatsUsed < 3)
-                        isGPSFix = false;
-
-                    break;
+                }
             }
+        }
+        GPSServer inst = sInstance;
+        if (inst != null) inst.wire(nativelib, activity);
+        return inst;
+    }
+
+    /** Convenience: start tracking via intent. */
+    public static void start(Context context) {
+        Intent intent = new Intent(context, GPSServer.class).setAction(ACTION_START);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            context.startForegroundService(intent);
+        } else {
+            context.startService(intent);
         }
     }
 
-    public GPSServer(Context context, OCPNNativeLib nativelib, Activity activity) {
-        this.mContext = context;
-        this.mNativeLib = nativelib;
-        this.parent_activity = activity;
-//        getLocation();
+    /** Convenience: stop tracking via intent. */
+    public static void stop(Context context) {
+        context.startService(new Intent(context, GPSServer.class).setAction(ACTION_STOP));
     }
 
-    public String doService( int parm )
-    {
-        String ret_string = "???";
-        locationManager = (LocationManager) mContext.getSystemService(LOCATION_SERVICE);
+    @Override
+    public void onCreate() {
+        super.onCreate();
+        synchronized (sInstanceLock) {
+            sInstance = this;
+            sInstanceLock.notifyAll();
+        }
+        locationManager = (LocationManager) getSystemService(LOCATION_SERVICE);
+        workerThread = new HandlerThread("OCPN-GPS");
+        workerThread.start();
+        workerHandler = new Handler(workerThread.getLooper());
+        createNotificationChannel();
+        Log.i(TAG, "service created");
+    }
 
-        switch (parm){
+    @Override
+    public int onStartCommand(Intent intent, int flags, int startId) {
+        String action = intent != null ? intent.getAction() : null;
+        if (ACTION_STOP.equals(action)) {
+            stopTracking();
+            stopSelf();
+            return START_NOT_STICKY;
+        }
+        // ACTION_START (or null): become foreground immediately, as required
+        // for location foreground services on Android 8+.
+        // NOTE: the 3-arg startForeground(id, notification, type) overload only
+        // exists on API 29+; call the 2-arg form on older releases.
+        if (Build.VERSION.SDK_INT >= 29) {
+            startForeground(NOTIF_ID, buildNotification(),
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION);
+        } else {
+            startForeground(NOTIF_ID, buildNotification());
+        }
+        beginTracking();
+        return START_STICKY;
+    }
+
+    @Override
+    public void onDestroy() {
+        stopTracking();
+        if (workerThread != null) workerThread.quitSafely();
+        synchronized (sInstanceLock) {
+            if (sInstance == this) sInstance = null;
+        }
+        Log.i(TAG, "service destroyed");
+        super.onDestroy();
+    }
+
+    @Override
+    public IBinder onBind(Intent intent) {
+        return null; // started-service only; native layer uses the singleton
+    }
+
+    // ------------------------------------------------------------------
+    // Legacy native bridge (called from QtActivity.queryGPSServer via JNI)
+    // ------------------------------------------------------------------
+
+    /**
+     * Legacy entry point. GPS_ON starts the foreground service and begins
+     * tracking; GPS_OFF stops tracking and the service.
+     */
+    public String doService(int parm) {
+        switch (parm) {
             case GPS_OFF:
-            Log.i("DEBUGGER_TAG", "GPS OFF");
-
-            if(locationManager != null){
-                if(isThreadStarted){
-                    locationManager.removeUpdates(GPSServer.this);
-                    locationManager.removeNmeaListener (mNMEAListener);
-                    isThreadStarted = false;
-                }
+                stopTracking();
+                stopSelf();
+                return "GPS_OFF OK";
+            case GPS_ON: {
+                String err = beginTracking();
+                return err != null ? err : "GPS_ON OK";
             }
-
-            ret_string = "GPS_OFF OK";
-            break;
-
-            case GPS_ON:
-                Log.i("DEBUGGER_TAG", "GPS ON");
-
-                isGPSEnabled = locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER);
-
-                if(isGPSEnabled){
-                    Log.i("DEBUGGER_TAG", "GPS is Enabled");
-                }
-                else{
-                    Log.i("DEBUGGER_TAG", "GPS is <<<<DISABLED>>>>");
-                    ret_string = "GPS is disabled";
-                    status_string = ret_string;
-                    return ret_string;
-                }
-
-/*
-                isNetworkEnabled = locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER);
-                if(isNetworkEnabled)
-                    Log.i("DEBUGGER_TAG", "Network is Enabled");
-                else
-                    Log.i("DEBUGGER_TAG", "Network is <<<<DISABLED>>>>");
-*/
-
-                if(!isThreadStarted){
-
-                    parent_activity.runOnUiThread(new Runnable()   {
-                        LocationManager locationManager;
-                        public void run()   {
-
-                            locationManager = (LocationManager) mContext.getSystemService(LOCATION_SERVICE);
-                            Log.i("DEBUGGER_TAG", "Requesting Updates");
-                            locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER,1000,1, GPSServer.this);
-
-                            mNMEAListener = new OCPNGpsNmeaListener(mNativeLib, GPSServer.this);
-                            locationManager.addNmeaListener (mNMEAListener);
-
-                            mMyListener = new MyListener();
-                            locationManager.addGpsStatusListener(mMyListener);
-
-                        }
-                    });
-
-
-                    HandlerThread hThread = new HandlerThread("HandlerThread");
-                    hThread.start();
-                    final Handler handler = new Handler(hThread.getLooper());
-
-
-                    Runnable ticker = new Runnable() {
-                        @Override
-                        public void run() {
-//                            Log.i("DEBUGGER_TAG", "Tick");
-
-                            m_tick++;
-                            m_watchDog++;
-
-                            if(isGPSEnabled && (m_watchDog > 10)){
-                                if(null != locationManager){
-                                    mLastLocation = locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER);
-                                    if (mLastLocation != null) {
-                                        latitude = mLastLocation.getLatitude();
-                                        longitude = mLastLocation.getLongitude();
-                                        course = mLastLocation.getBearing();
-                                        speed = mLastLocation.getSpeed();
-                                    }
-
-                                    if(null != mNativeLib){
-                                        String s = createRMC();
-                                        mNativeLib.processNMEA( s );
-                                    }
-                                }
-                            }
-
-                            handler.postDelayed(this, 1000);
-                            }
-                        };
-
-                    // Schedule the first execution
-                    handler.postDelayed(ticker, 1000);
-
-
-                    isThreadStarted = true;
-                }
-
-                ret_string = "GPS_ON OK";
-                break;
-
             case GPS_PROVIDER_AVAILABLE:
-            if(hasGPSDevice( mContext )){
-                    ret_string = "YES";
-                    Log.i("DEBUGGER_TAG", "Provider yes");
-                }
-                else{
-                    ret_string = "NO";
-                    Log.i("DEBUGGER_TAG", "Provider no");
-                }
-
-                break;
-
+                return hasGPSDevice(this) ? "YES" : "NO";
             case GPS_SHOWPREFERENCES:
                 showSettingsAlert();
-                break;
+                return "SETTINGS SHOWN";
+            default:
+                return "???";
+        }
+    }
 
-        }   // switch
+    // ------------------------------------------------------------------
+    // Tracking core
+    // ------------------------------------------------------------------
 
+    /** Begin location updates. Returns null on success, else an error string. */
+    private String beginTracking() {
+        synchronized (lock) {
+            if (tracking) return null;
+            if (locationManager == null) return "no location manager";
 
-        status_string = ret_string;
-        return ret_string;
-     }
+            if (checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION)
+                    != PackageManager.PERMISSION_GRANTED
+                && checkSelfPermission(android.Manifest.permission.ACCESS_COARSE_LOCATION)
+                    != PackageManager.PERMISSION_GRANTED) {
+                Log.w(TAG, "location permission not granted");
+                requestLocationPermission();
+                return "location permission not granted";
+            }
 
+            if (!locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
+                Log.w(TAG, "GPS provider disabled");
+                return "GPS is disabled";
+            }
 
+            try {
+                locationManager.requestLocationUpdates(
+                        LocationManager.GPS_PROVIDER, MIN_TIME_MS, MIN_DISTANCE_M,
+                        locationListener, workerThread.getLooper());
 
-     public boolean hasGPSDevice(Context context)
-     {
+                nmeaListener = (nmea, timestamp) -> {
+                    lastFixElapsedMs = SystemClock.elapsedRealtime();
+                    staleReported = false;
+                    if (nativeLib != null && nmea != null) {
+                        nativeLib.processNMEA(nmea);
+                    }
+                };
+                locationManager.addNmeaListener(nmeaListener, workerHandler);
 
- //        This code crashes unless run from the GUI thread, so is moved to the QtActivity initialization
- //        PackageManager packMan = getPackageManager();
- //        return packMan.hasSystemFeature(PackageManager.FEATURE_LOCATION_GPS);
+                gnssCallback = new GnssStatus.Callback() {
+                    @Override
+                    public void onFirstFix(int ttffMillis) {
+                        hasFix = true;
+                        Log.i(TAG, "GNSS first fix, ttff=" + ttffMillis + "ms");
+                    }
 
-    // This code produces false positive for some generic android tablets.
-         final LocationManager mgr = (LocationManager)context.getSystemService(Context.LOCATION_SERVICE);
-         if ( mgr == null )
-            return false;
-         final List<String> providers = mgr.getAllProviders();
-         if ( providers == null )
-            return false;
-         return providers.contains(LocationManager.GPS_PROVIDER);
+                    @Override
+                    public void onSatelliteStatusChanged(GnssStatus status) {
+                        int used = 0;
+                        for (int i = 0; i < status.getSatelliteCount(); i++) {
+                            if (status.usedInFix(i)) used++;
+                        }
+                        hasFix = used >= 3;
+                    }
+                };
+                locationManager.registerGnssStatusCallback(gnssCallback, workerHandler);
 
-     }
+                tracking = true;
+                lastFixElapsedMs = SystemClock.elapsedRealtime();
+                workerHandler.post(watchdog);
+                updateNotification();
+                Log.i(TAG, "tracking started");
+                return null;
+            } catch (SecurityException e) {
+                Log.e(TAG, "requestLocationUpdates denied", e);
+                return "location permission denied";
+            }
+        }
+    }
 
+    private void stopTracking() {
+        synchronized (lock) {
+            if (!tracking) return;
+            tracking = false;
+            try {
+                if (locationManager != null) {
+                    locationManager.removeUpdates(locationListener);
+                    if (nmeaListener != null) {
+                        locationManager.removeNmeaListener(nmeaListener);
+                    }
+                    if (gnssCallback != null) {
+                        locationManager.unregisterGnssStatusCallback(gnssCallback);
+                    }
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "error while stopping updates", e);
+            }
+            nmeaListener = null;
+            gnssCallback = null;
+            hasFix = false;
+            if (workerHandler != null) workerHandler.removeCallbacks(watchdog);
+            stopForeground(true);
+            Log.i(TAG, "tracking stopped");
+        }
+    }
 
-    public Location getLocation() {
+    /** Watchdog: synthesize a void RMC when fixes go stale (no polling of GPS). */
+    private final Runnable watchdog = new Runnable() {
+        @Override
+        public void run() {
+            synchronized (lock) {
+                if (!tracking) return;
+                long silent = SystemClock.elapsedRealtime() - lastFixElapsedMs;
+                if (silent > STALE_AFTER_MS && !staleReported) {
+                    staleReported = true;
+                    hasFix = false;
+                    Log.w(TAG, "location stale after " + silent + "ms");
+                    if (nativeLib != null) {
+                        nativeLib.processNMEA(createRMC(false));
+                    }
+                }
+                workerHandler.postDelayed(this, 2000);
+            }
+        }
+    };
+
+    private void requestLocationPermission() {
+        Activity act = activityRef != null ? activityRef.get() : null;
+        if (act != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            act.requestPermissions(
+                    new String[]{
+                            android.Manifest.permission.ACCESS_FINE_LOCATION,
+                            android.Manifest.permission.ACCESS_COARSE_LOCATION},
+                    0x0c9a);
+        }
+    }
+
+    private void showSettingsAlert() {
+        Intent intent = new Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS);
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         try {
-            locationManager = (LocationManager) mContext
-                    .getSystemService(LOCATION_SERVICE);
-
-            // getting GPS status
-            isGPSEnabled = locationManager
-                    .isProviderEnabled(LocationManager.GPS_PROVIDER);
-
-            // getting network status
-            isNetworkEnabled = locationManager
-                    .isProviderEnabled(LocationManager.NETWORK_PROVIDER);
-
-            if (!isGPSEnabled && !isNetworkEnabled) {
-                // no network provider is enabled
-            } else {
-                this.canGetLocation = true;
-                // First get location from Network Provider
-                if (isNetworkEnabled) {
-                    locationManager.requestLocationUpdates(
-                            LocationManager.NETWORK_PROVIDER,
-                            MIN_TIME_BW_UPDATES,
-                            MIN_DISTANCE_CHANGE_FOR_UPDATES, this);
-                    Log.d("Network", "Network");
-                    if (locationManager != null) {
-                        mLastLocation = locationManager
-                                .getLastKnownLocation(LocationManager.NETWORK_PROVIDER);
-                        if (mLastLocation != null) {
-                            latitude = mLastLocation.getLatitude();
-                            longitude = mLastLocation.getLongitude();
-                        }
-                    }
-                }
-                // if GPS Enabled get lat/long using GPS Services
-                if (isGPSEnabled) {
-                    if (mLastLocation == null) {
-                        locationManager.requestLocationUpdates(
-                                LocationManager.GPS_PROVIDER,
-                                MIN_TIME_BW_UPDATES,
-                                MIN_DISTANCE_CHANGE_FOR_UPDATES, this);
-                        Log.d("GPS Enabled", "GPS Enabled");
-                        if (locationManager != null) {
-                            mLastLocation = locationManager
-                                    .getLastKnownLocation(LocationManager.GPS_PROVIDER);
-                            if (mLastLocation != null) {
-                                latitude = mLastLocation.getLatitude();
-                                longitude = mLastLocation.getLongitude();
-                            }
-                        }
-                    }
-                }
-            }
-
+            startActivity(intent);
         } catch (Exception e) {
-            e.printStackTrace();
-        }
-
-        return mLastLocation;
-    }
-
-    /**
-     * Stop using GPS listener
-     * Calling this function will stop using GPS in your app
-     * */
-    public void stopUsingGPS(){
-        if(locationManager != null){
-            locationManager.removeUpdates(GPSServer.this);
+            Log.w(TAG, "cannot open location settings", e);
         }
     }
 
-    /**
-     * Function to get latitude
-     * */
-    public double getLatitude(){
-        if(mLastLocation != null){
-            latitude = mLastLocation.getLatitude();
+    public boolean hasGPSDevice(Context context) {
+        final LocationManager mgr =
+                (LocationManager) context.getSystemService(Context.LOCATION_SERVICE);
+        if (mgr == null) return false;
+        final List<String> providers = mgr.getAllProviders();
+        return providers != null && providers.contains(LocationManager.GPS_PROVIDER);
+    }
+
+    // ------------------------------------------------------------------
+    // Foreground notification
+    // ------------------------------------------------------------------
+
+    private void createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationChannel ch = new NotificationChannel(
+                    CHANNEL_ID,
+                    getString(R.string.gps_notification_channel_name),
+                    NotificationManager.IMPORTANCE_LOW);
+            ch.setDescription(getString(R.string.gps_notification_channel_description));
+            NotificationManager nm = getSystemService(NotificationManager.class);
+            if (nm != null) nm.createNotificationChannel(ch);
         }
-
-        // return latitude
-        return latitude;
     }
 
-    /**
-     * Function to get longitude
-     * */
-    public double getLongitude(){
-        if(mLastLocation != null){
-            longitude = mLastLocation.getLongitude();
+    @SuppressWarnings("deprecation") // Notification.Builder(Context) for API 24-25
+    private Notification buildNotification() {
+        Intent tap = new Intent(this, org.qtproject.qt5.android.bindings.QtActivity.class);
+        tap.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        PendingIntent tapPi = PendingIntent.getActivity(
+                this, 0, tap, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
+        Intent stop = new Intent(this, GPSServer.class).setAction(ACTION_STOP);
+        PendingIntent stopPi = PendingIntent.getService(
+                this, 1, stop, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
+        Notification.Builder b;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            b = new Notification.Builder(this, CHANNEL_ID);
+        } else {
+            b = new Notification.Builder(this);
         }
-
-        // return longitude
-        return longitude;
+        return b.setContentTitle(getString(R.string.gps_notification_title))
+                .setContentText(statusLine())
+                .setSmallIcon(android.R.drawable.ic_menu_mylocation)
+                .setContentIntent(tapPi)
+                .addAction(android.R.drawable.ic_menu_close_clear_cancel,
+                        getString(R.string.gps_notification_stop), stopPi)
+                .setOngoing(true)
+                .setCategory(Notification.CATEGORY_NAVIGATION)
+                .build();
     }
 
-    /**
-     * Function to check GPS/wifi enabled
-     * @return boolean
-     * */
-    public boolean canGetLocation() {
-        return this.canGetLocation;
+    private String statusLine() {
+        if (!tracking) return getString(R.string.gps_notification_text);
+        if (!hasFix) return "Waiting for GPS fix…";
+        return String.format(Locale.US, "%.5f, %.5f", latitude, longitude);
     }
 
-    /**
-     * Function to show settings alert dialog
-     * On pressing Settings button will lauch Settings Options
-     * */
-    public void showSettingsAlert(){
-        AlertDialog.Builder alertDialog = new AlertDialog.Builder(this);
-
-        // Setting Dialog Title
-        alertDialog.setTitle("GPS is settings");
-
-        // Setting Dialog Message
-        alertDialog.setMessage("GPS is not enabled. Do you want to go to settings menu?");
-
-        // On pressing Settings button
-        alertDialog.setPositiveButton("Settings", new DialogInterface.OnClickListener() {
-            public void onClick(DialogInterface dialog,int which) {
-                Intent intent = new Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS);
-                mContext.startActivity(intent);
-            }
-        });
-
-        // on pressing cancel button
-        alertDialog.setNegativeButton("Cancel", new DialogInterface.OnClickListener() {
-            public void onClick(DialogInterface dialog, int which) {
-            dialog.cancel();
-            }
-        });
-
-        // Showing Alert Message
-        alertDialog.show();
+    private void updateNotification() {
+        NotificationManager nm = getSystemService(NotificationManager.class);
+        if (nm != null) nm.notify(NOTIF_ID, buildNotification());
     }
 
-    @Override
-    public void onLocationChanged(Location location) {
-        Log.i("DEBUGGER_TAG", "onLocationChanged");
-        if (location == null) return;
+    // ------------------------------------------------------------------
+    // NMEA synthesis (RMC) — checksum is computed, not hardcoded
+    // ------------------------------------------------------------------
 
-        mLastLocationMillis = SystemClock.elapsedRealtime();
+    private String createRMC(boolean valid) {
+        StringBuilder body = new StringBuilder("LCRMC,,");
+        body.append(valid ? 'A' : 'V').append(',');
+        body.append(formatLat()).append(',');
+        body.append(formatLon()).append(',');
+        // speed in knots
+        body.append(String.format(Locale.US, "%.2f,", speed / 0.5144f));
+        body.append(String.format(Locale.US, "%.0f,", course));
+        body.append(",,,"); // date/magvar unused
 
-        mLastLocation = location;
+        int checksum = 0;
+        for (int i = 0; i < body.length(); i++) checksum ^= body.charAt(i);
+        return "$" + body + String.format(Locale.US, "*%02X", checksum);
     }
 
-    @Override
-    public void onProviderDisabled(String provider) {
-        Log.i("DEBUGGER_TAG", "onProviderDisabled " + provider);
-
+    private String formatLat() {
+        double v = Math.abs(latitude);
+        double deg = Math.floor(v);
+        double min = (v - deg) * 60.0;
+        return String.format(Locale.US, "%02.0f%07.4f,%c", deg, min,
+                latitude >= 0 ? 'N' : 'S');
     }
 
-    @Override
-    public void onProviderEnabled(String provider) {
-        Log.i("DEBUGGER_TAG", "onProviderEnabled " + provider);
-
-    }
-
-    @Override
-    public void onStatusChanged(String provider, int status, Bundle extras) {
-        Log.i("DEBUGGER_TAG", "onStatusChanged");
-
-    }
-
-
-    @Override
-    public IBinder onBind(Intent arg0) {
-        return null;
-    }
-
-    private String createRMC(){
-        // Create an NMEA sentence
-        String s = "$LCRMC,,";
-        if(isGPSFix)
-            s = s.concat("A,");
-        else
-            s = s.concat("V,");
-
-
-        String slat = "";
-        double ltt = latitude;
-        if(latitude < 0)
-            ltt = -latitude;
-
-        double d0 = Math.floor(ltt);
-        double d1 = ltt-d0;
-        double d2 = Math.floor(d1 * 60);
-        double d3 = (d1*60.) - d2;
-
-        slat = slat.format("%.0f.%.0f,", (d0 * 100.) + d2, d3 * 10000);
-
-        if(latitude > 0)
-            slat = slat.concat("N,");
-        else
-            slat = slat.concat("S,");
-
-
-        s = s.concat(slat);
-
-        String slon = "";
-        double lot = longitude;
-        if(longitude < 0)
-            lot = -longitude;
-
-        d0 = Math.floor(lot);
-        d1 = lot-d0;
-        d2 = Math.floor(d1 * 60);
-        d3 = (d1*60.) - d2;
-
-        if(d0 < 100.)
-            slon = "0";
-        slon = slon.concat(slon.format("%.0f.%.0f,", (d0 * 100.) + d2, d3 * 10000));
-
-        if(longitude > 0)
-            slon = slon.concat("E,");
-        else
-            slon = slon.concat("W,");
-
-        s = s.concat(slon);
-
-        String sspeed = "";
-        sspeed = sspeed.format("%.2f,", speed /.5144);
-        s = s.concat(sspeed);
-
-        String strack = "";
-        strack = strack.format("%.0f,", course);
-        s = s.concat(strack);
-
-        s = s.concat(",,,");      // unused fields
-
-        s = s.concat("*55");    // checksum
-
-//        s = s.concat("\r\n");
-
-        Log.i("DEBUGGER_TAG", s);
-
-        return s;
+    private String formatLon() {
+        double v = Math.abs(longitude);
+        double deg = Math.floor(v);
+        double min = (v - deg) * 60.0;
+        return String.format(Locale.US, "%03.0f%07.4f,%c", deg, min,
+                longitude >= 0 ? 'E' : 'W');
     }
 }
-
-
-
-//GPSTracker gps = new GPSTracker(this);
-//if(gps.canGetLocation()){ // gps enabled} // return boolean true/false
-
-//Getting Latitude and Longitude
-//gps.getLatitude(); // returns latitude
-//gps.getLongitude(); // returns longitude
-
-//Showing GPS Settings Alert Dialog
-//gps.showSettingsAlert();
-
-//Stop using GPS
-//gps.stopUsingGPS();

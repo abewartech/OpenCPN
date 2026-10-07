@@ -8,33 +8,55 @@ cmake_minimum_required(VERSION 3.1)
 set(CMAKE_SKIP_RPATH true)
 
 # Make sure we have downloaded and unpacked master.zip
-set(
-  OCPN_ANDROID_CACHEDIR "${CMAKE_SOURCE_DIR}/cache"
-  CACHE STRING "Build download area"
-)
+# OCPN_ANDROID_CACHEDIR may be preset on the cmake command line (or via env)
+# to share one download across build trees.
+if (NOT OCPN_ANDROID_CACHEDIR)
+  set(
+    OCPN_ANDROID_CACHEDIR "${CMAKE_SOURCE_DIR}/cache"
+    CACHE STRING "Build download area"
+  )
+endif ()
 set(_master_base ${OCPN_ANDROID_CACHEDIR}/OCPNAndroidCoreBuildSupport)
 message(STATUS "Android Build support file base:  ${OCPN_ANDROID_CACHEDIR}/OCPNAndroidCoreBuildSupport")
 
 
-if (TRUE) #(NOT EXISTS ${OCPN_ANDROID_CACHEDIR}/support.zip)
+# Download once; re-use a valid cached copy on later configures. The zip is
+# ~311 MB, so blindly re-downloading on every configure is wasteful.
+set(_support_zip ${OCPN_ANDROID_CACHEDIR}/support.zip)
+set(_need_dl TRUE)
+if (EXISTS ${_support_zip})
+  file(SIZE ${_support_zip} _zip_size)
+  # v1.2 asset is exactly 326050052 bytes; accept anything within 1 MB so a
+  # future re-release does not silently reuse a stale file.
+  if (_zip_size GREATER 325000000 AND _zip_size LESS 327000000)
+    set(_need_dl FALSE)
+    message(STATUS "Reusing cached Android support libs: ${_support_zip}")
+  else ()
+    message(STATUS "Cached support.zip has unexpected size (${_zip_size}), re-downloading")
+  endif ()
+endif ()
+if (_need_dl)
+  file(MAKE_DIRECTORY ${OCPN_ANDROID_CACHEDIR})
   file(
     DOWNLOAD
       https://github.com/bdbcat/OCPNAndroidCoreBuildSupport/releases/download/v1.2/OCPNAndroidCoreBuildSupport.zip
-      ${OCPN_ANDROID_CACHEDIR}/support.zip
-#    EXPECTED_HASH
-#      SHA256=ac36afaf4f026e9b2624a963f5356f5b1fb2c45dec1134209333a8b46fb05ca0
+      ${_support_zip}
     SHOW_PROGRESS
   )
 endif ()
-if (TRUE) #(NOT EXISTS ${_master_base})
+# Extract once; a sentinel file marks a completed extraction.
+set(_extract_sentinel ${_master_base}/.extracted_ok)
+if (NOT EXISTS ${_extract_sentinel})
   execute_process(
-    COMMAND ${CMAKE_COMMAND} -E tar -xzf ${OCPN_ANDROID_CACHEDIR}/support.zip
+    COMMAND ${CMAKE_COMMAND} -E tar -xzf ${_support_zip}
     WORKING_DIRECTORY "${OCPN_ANDROID_CACHEDIR}"
+    RESULT_VARIABLE _tar_result
   )
+  if (NOT _tar_result EQUAL 0)
+    message(FATAL_ERROR "Failed to extract Android support libs from ${_support_zip}")
+  endif ()
+  file(TOUCH ${_extract_sentinel})
 endif ()
-
-# testing
-#set(_master_base "/home/dsr/Projects/OCPNAndroidCoreBuildSupport")
 
 # Setup directories and libraries
 if ("${OCPN_TARGET_TUPLE}" MATCHES "Android-arm64")

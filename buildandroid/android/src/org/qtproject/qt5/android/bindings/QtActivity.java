@@ -45,8 +45,6 @@ import java.util.StringTokenizer;
 
 import com.google.android.gms.common.GoogleApiAvailability;
 
-import org.kde.necessitas.ministro.IMinistro;
-import org.kde.necessitas.ministro.IMinistroCallback;
 
 import android.os.SystemClock;
 import android.os.Environment;
@@ -168,7 +166,6 @@ import android.accounts.AccountManager;
 
 public class QtActivity extends Activity implements ActionBar.OnNavigationListener
 {
-    private final static int MINISTRO_INSTALL_REQUEST_CODE = 0xf3ee; // request code used to know when Ministro instalation is finished
     private final static int OCPN_SETTINGS_REQUEST_CODE = 0xf3ef; // request code used to know when OCPNsettings dialog activity is done
     private final static int OCPN_GOOGLEMAPS_REQUEST_CODE = 0xf3ed; // request code used to know when GoogleMaps activity is done
 
@@ -263,7 +260,6 @@ public class QtActivity extends Activity implements ActionBar.OnNavigationListen
 
     private static Activity m_activity = null;
 
-    private static final int INCOMPATIBLE_MINISTRO_VERSION = 1; // Incompatible Ministro version. Ministro needs to be upgraded.
     private static final int BUFFER_SIZE = 1024;
 
     private ActivityInfo m_activityInfo = null; // activity info object, used to access the libs and the strings
@@ -558,114 +554,49 @@ public class QtActivity extends Activity implements ActionBar.OnNavigationListen
     public native int test();
 
     public String getDisplayMetrics(){
-        //Log.i("DEBUGGER_TAG", "getDisplayDPI");
-/*
-        int i = nativeLib.test();
-        String aa;
-        aa = String.format("%d", i);
-        Log.i("DEBUGGER_TAG", aa);
+        // Output format is a native contract (parsed in androidUTIL.cpp):
+        //   xdpi;density;densityDpi;width;height-statusBar;width;height;
+        //   dm.widthPixels;dm.heightPixels;actionBarHeight;textSize
+        // Width/height are the *real* display size (incl. system bars) so the
+        // chart renderer can go edge-to-edge; the status-bar height is also
+        // reported separately for inset calculations.
+        DisplayMetrics dm = getResources().getDisplayMetrics();
 
-        String bb = "$GPRMC...";
-        int j = nativeLib.processNMEA(bb);
-//      int j = nativeLib.processNMEA( 44);
-        aa = String.format("%d", j);
-        Log.i("DEBUGGER_TAG", aa);
-*/
-        DisplayMetrics dm = new DisplayMetrics();
-        getWindowManager().getDefaultDisplay().getMetrics(dm);
         int statusBarHeight = 0;
-
         int resourceId = getResources().getIdentifier("status_bar_height", "dimen", "android");
         if (resourceId > 0) {
             statusBarHeight = getResources().getDimensionPixelSize(resourceId);
         }
 
-//        TypedValue typedValue = new TypedValue();
-//        if(getTheme().resolveAttribute(android.R.attr.actionBarSize, typedValue, true)){
-//            screen_h -= getResources().getDimensionPixelSize(typedValue.resourceId);
-//        }
-
         int actionBarHeight = 0;
         ActionBar actionBar = getActionBar();
-        if(actionBar.isShowing())
+        if (actionBar != null && actionBar.isShowing())
             actionBarHeight = actionBar.getHeight();
 
-//            float getTextSize() //pixels
-        int width = 600;
-        int height = 400;
-
-        Display display = getWindowManager().getDefaultDisplay();
-
-
-        if (Build.VERSION.SDK_INT >= 13) {
-
-            if(Build.VERSION.SDK_INT >= 17){
-                //Log.i("DEBUGGER_TAG", "VERSION.SDK_INT >= 17");
-                width = dm.widthPixels;
-                height = dm.heightPixels;
-            }
-            else{
-
-                switch (Build.VERSION.SDK_INT){
-
-                    case 16:
-                        //Log.i("DEBUGGER_TAG", "VERSION.SDK_INT == 16");
-                        width = dm.widthPixels;
-                        height = dm.heightPixels;
-                        break;
-
-                    case 15:
-                    case 14:
-                        Point outPoint = new Point();
-                        display.getRealSize(outPoint);
-                        if (outPoint != null){
-                            width = outPoint.x;
-                            height = outPoint.y;
-                        }
-                    break;
-
-                    default:
-                        width = dm.widthPixels;
-                        height = dm.heightPixels;
-                        break;
-
-                }
-            }
+        int width;
+        int height;
+        if (Build.VERSION.SDK_INT >= 30) {
+            android.view.WindowMetrics wm = getWindowManager().getCurrentWindowMetrics();
+            android.graphics.Rect bounds = wm.getBounds();
+            width = bounds.width();
+            height = bounds.height();
+        } else {
+            // API 24-29: getRealMetrics is deprecated in 31 but correct here.
+            Display display = getWindowManager().getDefaultDisplay();
+            DisplayMetrics real = new DisplayMetrics();
+            display.getRealMetrics(real);
+            width = real.widthPixels;
+            height = real.heightPixels;
+            dm = real;
         }
-        else{
-            //Log.i("DEBUGGER_TAG", "VERSION.SDK_INT < 13");
-            width = display.getWidth();
-            height = display.getHeight();
-        }
-
-
-
-//  In FullScreen immersive mode, height needs a fixup...
-        if(m_fullScreen){
-            Point outPoint = new Point();
-            display.getRealSize(outPoint);
-            if (outPoint != null){
-                width = outPoint.x;
-                height = outPoint.y;
-            }
-            height += statusBarHeight;
-        }
-
 
         float tsize = new Button(this).getTextSize();       // in pixels
 
-        String ret;
-
-        ret = String.format("%f;%f;%d;%d;%d;%d;%d;%d;%d;%d;%f", dm.xdpi, dm.density, dm.densityDpi,
+        return String.format("%f;%f;%d;%d;%d;%d;%d;%d;%d;%d;%f",
+               dm.xdpi, dm.density, dm.densityDpi,
                width, height - statusBarHeight,
                width, height,
                dm.widthPixels, dm.heightPixels, actionBarHeight, tsize);
-
-        //Log.i("DEBUGGER_TAG", ret);
-
-
-
-        return ret;
     }
 
     public String getDeviceInfo(){
@@ -820,6 +751,127 @@ public class QtActivity extends Activity implements ActionBar.OnNavigationListen
           }
 
 
+    /**
+     * Called from native code to (un)lock screen rotation, e.g. while modal
+     * dialogs are shown. The "_vs" JNI bridge expects a String return.
+     */
+    public String EnableRotation(){
+        setRequestedOrientation(
+            android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);
+        return "OK";
+    }
+
+    public String DisableRotation(){
+        int orientation = getResources().getConfiguration().orientation;
+        int lock = (orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE)
+                ? android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                : android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT;
+        setRequestedOrientation(lock);
+        return "OK";
+    }
+
+    // ------------------------------------------------------------------
+    // Storage Access Framework (SAF) — called from native code.
+    // The native side probes CheckSAFPermission(docId) ("primary:Documents")
+    // and, when it is not granted, fires DoSAFPermissionDialog() which opens
+    // the system directory picker. The grant is persisted across restarts.
+    // ------------------------------------------------------------------
+    private static final int OCPN_SAF_REQUEST_CODE = 0x5af1;
+
+    public String CheckSAFPermission(final String docId){
+        if (docId == null) return "";
+        try {
+            for (android.content.UriPermission perm :
+                    getContentResolver().getPersistedUriPermissions()) {
+                String treeDoc;
+                try {
+                    treeDoc = android.provider.DocumentsContract.getTreeDocumentId(
+                            perm.getUri());
+                } catch (IllegalArgumentException notATree) {
+                    continue;
+                }
+                if (docId.equals(treeDoc)
+                        && perm.isReadPermission() && perm.isWritePermission()) {
+                    return "OK";
+                }
+            }
+        } catch (Exception e) {
+            android.util.Log.w("OpenCPN", "CheckSAFPermission failed", e);
+        }
+        return "";
+    }
+
+    public String DoSAFPermissionDialog(){
+        try {
+            android.content.Intent intent =
+                    new android.content.Intent(
+                            android.content.Intent.ACTION_OPEN_DOCUMENT_TREE);
+            intent.addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    | android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                    | android.content.Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+                    | android.content.Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
+            startActivityForResult(intent, OCPN_SAF_REQUEST_CODE);
+        } catch (Exception e) {
+            android.util.Log.w("OpenCPN", "DoSAFPermissionDialog failed", e);
+        }
+        // Async: the grant (or denial) arrives in onActivityResult.
+        return "OK";
+    }
+
+    private void handleSafResult(int resultCode, android.content.Intent data){        if (resultCode != RESULT_OK || data == null || data.getData() == null)
+            return;
+        android.net.Uri treeUri = data.getData();
+        try {
+            getContentResolver().takePersistableUriPermission(treeUri,
+                    android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    | android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+            android.util.Log.i("OpenCPN", "SAF grant persisted: " + treeUri);
+        } catch (Exception e) {
+            android.util.Log.w("OpenCPN", "takePersistableUriPermission failed", e);
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // All-files access (MANAGE_EXTERNAL_STORAGE) — needed to scan chart
+    // directories on shared storage under scoped storage (API 30+).
+    // ------------------------------------------------------------------
+
+    /** Returns "OK" when the app may read arbitrary shared-storage paths. */
+    public String CheckAllFilesAccess(){
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= 30) {
+                return android.os.Environment.isExternalStorageManager()
+                        ? "OK" : "";
+            }
+        } catch (Exception e) {
+            android.util.Log.w("OpenCPN", "CheckAllFilesAccess failed", e);
+        }
+        return "OK";  // pre-30: legacy storage perms cover this
+    }
+
+    /** Opens the system "All files access" settings page for this app. */
+    public String RequestAllFilesAccess(){
+        try {
+            android.content.Intent intent;
+            if (android.os.Build.VERSION.SDK_INT >= 30) {
+                intent = new android.content.Intent(
+                        android.provider.Settings
+                                .ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION);
+                intent.setData(android.net.Uri.parse(
+                        "package:" + getPackageName()));
+            } else {
+                intent = new android.content.Intent(
+                        android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+                intent.setData(android.net.Uri.parse(
+                        "package:" + getPackageName()));
+            }
+            startActivity(intent);
+        } catch (Exception e) {
+            android.util.Log.w("OpenCPN", "RequestAllFilesAccess failed", e);
+        }
+        return "OK";
+    }
+
     public String queryGPSServer( final int parm ){
 
         if( GPSServer.GPS_PROVIDER_AVAILABLE == parm){
@@ -829,13 +881,20 @@ public class QtActivity extends Activity implements ActionBar.OnNavigationListen
             return ret_string;
         }
 
-
-
-        if(!m_GPSServiceStarted){
-            //Log.i("DEBUGGER_TAG", "Start GPS Server");
-            m_GPSServer = new GPSServer(getApplicationContext(), nativeLib, this);
-            m_GPSServiceStarted = true;
+        // GPS tracking runs in a real foreground service (declared in the
+        // manifest) so it survives the Activity being backgrounded.
+        // GPS_OFF never starts the service: just stop any running instance.
+        if (GPSServer.GPS_OFF == parm) {
+            GPSServer.stop(getApplicationContext());
+            m_GPSServiceStarted = false;
+            return "GPS_OFF OK";
         }
+        m_GPSServer = GPSServer.obtain(getApplicationContext(), nativeLib, this);
+        if (m_GPSServer == null) {
+            Log.e("OpenCPN", "queryGPSServer: service instance unavailable");
+            return "service unavailable";
+        }
+        m_GPSServiceStarted = true;
 
         return m_GPSServer.doService( parm );
     }
@@ -1468,17 +1527,37 @@ public class QtActivity extends Activity implements ActionBar.OnNavigationListen
            result = "INTAPP;";
        }
 
-
-
-       result = result.concat(getFilesDir().getPath() + ";");
-       result = result.concat(getCacheDir().getPath() + ";");
-       result = result.concat(getExternalFilesDir(null).getPath() + ";");
-       result = result.concat(getExternalCacheDir().getPath() + ";");
-       result = result.concat(Environment.getExternalStorageDirectory().getPath() + ";");
+       // Field order is part of the native contract (see androidGet*Dir()
+       // in androidUTIL.cpp): filesDir; cacheDir; externalFilesDir;
+       // externalCacheDir; sharedExternalRoot.
+       result = result.concat(dirPath(getFilesDir()) + ";");
+       result = result.concat(dirPath(getCacheDir()) + ";");
+       result = result.concat(dirPath(getExternalFilesDir(null)) + ";");
+       result = result.concat(dirPath(getExternalCacheDir()) + ";");
+       result = result.concat(sharedExternalRoot() + ";");
 
        //Log.i("DEBUGGER_TAG", result);
 
        return result;
+   }
+
+   private static String dirPath(java.io.File dir){
+       return dir != null ? dir.getPath() : "";
+   }
+
+   /**
+    * Shared external-storage root (e.g. /storage/emulated/0) without the
+    * deprecated Environment.getExternalStorageDirectory(). Derived from the
+    * app-specific external files dir, which is always on the primary shared
+    * volume. Returns "" when unavailable (scoped-storage devices).
+    */
+   private String sharedExternalRoot(){
+       java.io.File ext = getExternalFilesDir(null);
+       if (ext == null) return "";
+       // .../Android/data/<pkg>/files -> walk up 4 levels to the volume root
+       java.io.File root = ext;
+       for (int i = 0; i < 4 && root != null; i++) root = root.getParentFile();
+       return root != null ? root.getPath() : "";
    }
 
 
@@ -1626,10 +1705,6 @@ public class QtActivity extends Activity implements ActionBar.OnNavigationListen
         try {
             final int errorCode = loaderParams.getInt(ERROR_CODE_KEY);
             if (errorCode != 0) {
-                if (errorCode == INCOMPATIBLE_MINISTRO_VERSION) {
-                    downloadUpgradeMinistro(loaderParams.getString(ERROR_MESSAGE_KEY));
-                    return;
-                }
 
                 // fatal error, show the error and quit
                 AlertDialog errorDialog = new AlertDialog.Builder(QtActivity.this).create();
@@ -1713,79 +1788,6 @@ public class QtActivity extends Activity implements ActionBar.OnNavigationListen
         }
     }
 
-    private ServiceConnection m_ministroConnection=new ServiceConnection() {
-        private IMinistro m_service = null;
-        @Override
-        public void onServiceConnected(ComponentName name, IBinder service)
-        {
-            m_service = IMinistro.Stub.asInterface(service);
-            try {
-                if (m_service != null) {
-                    Bundle parameters = new Bundle();
-                    parameters.putStringArray(REQUIRED_MODULES_KEY, m_qtLibs);
-                    parameters.putString(APPLICATION_TITLE_KEY, (String)QtActivity.this.getTitle());
-                    parameters.putInt(MINIMUM_MINISTRO_API_KEY, MINISTRO_API_LEVEL);
-                    parameters.putInt(MINIMUM_QT_VERSION_KEY, QT_VERSION);
-                    parameters.putString(ENVIRONMENT_VARIABLES_KEY, ENVIRONMENT_VARIABLES);
-                    if (APPLICATION_PARAMETERS != null)
-                        parameters.putString(APPLICATION_PARAMETERS_KEY, APPLICATION_PARAMETERS);
-                    parameters.putStringArray(SOURCES_KEY, m_sources);
-                    parameters.putString(REPOSITORY_KEY, m_repository);
-                    if (QT_ANDROID_THEMES != null)
-                        parameters.putStringArray(ANDROID_THEMES_KEY, QT_ANDROID_THEMES);
-                    m_service.requestLoader(m_ministroCallback, parameters);
-                }
-            } catch (RemoteException e) {
-                    e.printStackTrace();
-            }
-        }
-
-        private IMinistroCallback m_ministroCallback = new IMinistroCallback.Stub() {
-            // this function is called back by Ministro.
-            @Override
-            public void loaderReady(final Bundle loaderParams) throws RemoteException {
-                runOnUiThread(new Runnable() {
-                    @Override
-                    public void run() {
-                        unbindService(m_ministroConnection);
-                        loadApplication(loaderParams);
-                    }
-                });
-            }
-        };
-
-        @Override
-        public void onServiceDisconnected(ComponentName name) {
-            m_service = null;
-        }
-    };
-
-    private void downloadUpgradeMinistro(String msg)
-    {
-        AlertDialog.Builder downloadDialog = new AlertDialog.Builder(this);
-        downloadDialog.setMessage(msg);
-        downloadDialog.setPositiveButton(android.R.string.yes, new DialogInterface.OnClickListener() {
-            @Override
-            public void onClick(DialogInterface dialogInterface, int i) {
-                try {
-                    Uri uri = Uri.parse("market://search?q=pname:org.kde.necessitas.ministro");
-                    Intent intent = new Intent(Intent.ACTION_VIEW, uri);
-                    startActivityForResult(intent, MINISTRO_INSTALL_REQUEST_CODE);
-                } catch (Exception e) {
-                    e.printStackTrace();
-                    ministroNotFound();
-                }
-            }
-        });
-
-        downloadDialog.setNegativeButton(android.R.string.no, new DialogInterface.OnClickListener() {
-            @Override
-            public void onClick(DialogInterface dialogInterface, int i) {
-                QtActivity.this.finish();
-            }
-        });
-        downloadDialog.show();
-    }
 
     private void ministroNotFound()
     {
@@ -1794,7 +1796,7 @@ public class QtActivity extends Activity implements ActionBar.OnNavigationListen
         if (m_activityInfo.metaData.containsKey("android.app.ministro_not_found_msg"))
             errorDialog.setMessage(m_activityInfo.metaData.getString("android.app.ministro_not_found_msg"));
         else
-            errorDialog.setMessage("Can't find Ministro service.\nThe application can't start.");
+            errorDialog.setMessage("Required application libraries are missing.\nThe application can't start.");
 
         errorDialog.setButton(getResources().getString(android.R.string.ok), new DialogInterface.OnClickListener() {
             @Override
@@ -2096,22 +2098,12 @@ public class QtActivity extends Activity implements ActionBar.OnNavigationListen
                 return;
             }
 
-            try {
-                if (!bindService(new Intent(org.kde.necessitas.ministro.IMinistro.class.getCanonicalName()),
-                                 m_ministroConnection,
-                                 Context.BIND_AUTO_CREATE)) {
-                    throw new SecurityException("");
-                }
-            } catch (Exception e) {
-                if (firstStart) {
-                    String msg = "This application requires Ministro service. Would you like to install it?";
-                    if (m_activityInfo.metaData.containsKey("android.app.ministro_needed_msg"))
-                        msg = m_activityInfo.metaData.getString("android.app.ministro_needed_msg");
-                    downloadUpgradeMinistro(msg);
-                } else {
-                    ministroNotFound();
-                }
-            }
+            // Ministro (the system-wide Qt library provider) was discontinued in
+            // 2015 and the service no longer exists. Modern builds always
+            // bundle Qt libs locally (android.app.use_local_qt_libs=1), so
+            // this branch is unreachable in practice. Fail fast with a clear
+            // message instead of attempting to bind a dead service.
+            ministroNotFound();
         } catch (Exception e) {
             Log.e(QtApplication.QtTAG, "Can't create main activity", e);
         }
@@ -2196,6 +2188,11 @@ public class QtActivity extends Activity implements ActionBar.OnNavigationListen
     protected void onActivityResult(int requestCode, int resultCode, Intent data)
     {
 //        Log.i("DEBUGGER_TAG", "onActivityResultA");
+        if (requestCode == OCPN_SAF_REQUEST_CODE) {
+            handleSafResult(resultCode, data);
+            super.onActivityResult(requestCode, resultCode, data);
+            return;
+        }
         if (requestCode == OCPN_SETTINGS_REQUEST_CODE) {
 //            Log.i("DEBUGGER_TAG", "onqtActivityResultC");
             // Make sure the request was successful
@@ -2336,8 +2333,6 @@ public class QtActivity extends Activity implements ActionBar.OnNavigationListen
             return;
         }
         //Log.i("DEBUGGER_TAG", "onqtActivityResultB");
-        if (requestCode == MINISTRO_INSTALL_REQUEST_CODE)
-            startApp(false);
 
         super.onActivityResult(requestCode, resultCode, data);
     }
@@ -2553,6 +2548,19 @@ public class QtActivity extends Activity implements ActionBar.OnNavigationListen
 
 
         // Validate Google Licensing plan...
+        // The Play license check is opt-in via the manifest meta-data flag
+        // "org.opencpn.enforce_play_license" (default false). Open-source
+        // builds must start without a Play license; commercial Play builds
+        // can set the flag to true to keep the original DRM behavior.
+        boolean enforcePlayLicense = false;
+        try {
+            android.content.pm.ActivityInfo ai = getPackageManager().getActivityInfo(
+                    getComponentName(), android.content.pm.PackageManager.GET_META_DATA);
+            if (ai.metaData != null)
+                enforcePlayLicense = ai.metaData.getBoolean("org.opencpn.enforce_play_license", false);
+        } catch (Exception ignored) { }
+
+        if (enforcePlayLicense) {
 
         // This device must have a Google Play Services account...
         AccountManager am = AccountManager.get(this);
@@ -2589,6 +2597,8 @@ public class QtActivity extends Activity implements ActionBar.OnNavigationListen
         // Initiate a license check
             doLicenseCheck();
         }
+
+        } // end if (enforcePlayLicense)
 
 
         try {
@@ -2984,6 +2994,20 @@ public class QtActivity extends Activity implements ActionBar.OnNavigationListen
     {
         if (!QtApplication.invokeDelegate().invoked)
             super.onLowMemory();
+        // Also shed native GL texture memory.
+        try { nativeLib.onTrimMemory(80 /* TRIM_MEMORY_COMPLETE */); }
+        catch (UnsatisfiedLinkError ignored) {}
+    }
+    //---------------------------------------------------------------------------
+
+    @Override
+    public void onTrimMemory(int level)
+    {
+        if (!QtApplication.invokeDelegate().invoked)
+            super.onTrimMemory(level);
+        // Forward memory pressure to native: crunch/clear chart textures.
+        try { nativeLib.onTrimMemory(level); }
+        catch (UnsatisfiedLinkError ignored) {}
     }
     //---------------------------------------------------------------------------
 

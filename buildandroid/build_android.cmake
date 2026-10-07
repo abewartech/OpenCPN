@@ -9,7 +9,9 @@ SET(CMAKE_SYSTEM_PROCESSOR arm)
 # specify the cross compilers and tools
 
 if ("${OCPN_TARGET_TUPLE}" MATCHES "Android-arm64")
-  set(CMAKE_AR ${tool_base}/bin/aarch64-linux-android-ar)
+  # NDK r26 removed the aarch64-linux-android-ar wrapper; llvm-ar is the
+  # only archiver shipped.
+  set(CMAKE_AR ${tool_base}/bin/llvm-ar)
   set(CMAKE_CXX_COMPILER ${tool_base}/bin/aarch64-linux-android21-clang++)
   set(CMAKE_C_COMPILER ${tool_base}/bin/aarch64-linux-android21-clang)
 else ()

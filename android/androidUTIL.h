@@ -99,6 +99,9 @@ extern bool androidStopGPS();
 extern wxString androidGPSService(int parm);
 extern bool androidDeviceHasGPS();
 
+extern bool androidHasAllFilesAccess();
+extern void androidRequestAllFilesAccess();
+
 extern bool androidDeviceHasBlueTooth();
 extern bool androidStartBluetoothScan();
 extern bool androidStopBluetoothScan();

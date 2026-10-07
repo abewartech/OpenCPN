@@ -3,4 +3,12 @@
 
     <string name="hello_world">Hello world!</string>
     <string name="action_settings">Settings</string>
+
+    <!-- Foreground GPS tracking service (declared in AndroidManifest.xml). -->
+    <string name="gps_service_description">Provides GPS position to OpenCPN while tracking is active.</string>
+    <string name="gps_notification_channel_name">Position tracking</string>
+    <string name="gps_notification_channel_description">Shows while OpenCPN is recording your vessel position.</string>
+    <string name="gps_notification_title">OpenCPN is tracking position</string>
+    <string name="gps_notification_text">Tap to return to the chart.</string>
+    <string name="gps_notification_stop">Stop</string>
 </resources>

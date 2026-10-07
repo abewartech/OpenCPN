@@ -41,8 +41,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
-import org.kde.necessitas.ministro.IMinistro;
-import org.kde.necessitas.ministro.IMinistroCallback;
 
 import android.app.Activity;
 import android.app.AlertDialog;

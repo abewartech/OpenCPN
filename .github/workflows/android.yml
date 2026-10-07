@@ -1,0 +1,132 @@
+# Android CI — builds the OpenCPN native corelib for Android (arm64 + armhf),
+# compile-checks the Java layer, and runs the host unit tests.
+#
+# The full APK assembly (Qt5-for-Android + wxQt link + androiddeployqt) is not
+# part of this job; see buildandroid/README-android.md for the manual steps.
+
+name: Android
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "android/**"
+      - "buildandroid/**"
+      - "gui/**"
+      - "model/**"
+      - "libs/**"
+      - "include/**"
+      - "CMakeLists.txt"
+      - ".github/workflows/android.yml"
+  pull_request:
+    paths:
+      - "android/**"
+      - "buildandroid/**"
+      - "gui/**"
+      - "model/**"
+      - "libs/**"
+      - "include/**"
+      - "CMakeLists.txt"
+      - ".github/workflows/android.yml"
+  workflow_dispatch:
+
+env:
+  NDK_VERSION: "26.1.10909125"
+  ANDROID_API: "35"
+
+jobs:
+  corelib:
+    name: corelib (${{ matrix.arch }})
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            tuple: "Android-arm64;21;arm64"
+          - arch: armhf
+            tuple: "Android-armhf;21;armhf"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake ninja-build gettext
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Android SDK + NDK (cached)
+        uses: android-actions/setup-android@v3
+        with:
+          packages: "ndk;${{ env.NDK_VERSION }} platforms;android-${{ env.ANDROID_API }}"
+
+      - name: Configure (CMake, Android toolchain)
+        run: |
+          TOOL_BASE="$ANDROID_HOME/ndk/${{ env.NDK_VERSION }}/toolchains/llvm/prebuilt/linux-x86_64"
+          cmake -S . -B build-android-${{ matrix.arch }} -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            "-DOCPN_TARGET_TUPLE:STRING=${{ matrix.tuple }}" \
+            -Dtool_base="$TOOL_BASE" \
+            -DOCPN_BUILD_TEST=OFF \
+            -DOCPN_BUNDLE_DOCS=OFF
+          # Prove the support-libs cache is reusable: a second configure must
+          # not re-download the ~311 MB support zip.
+          cmake -S . -B build-android-${{ matrix.arch }} 2>&1 | tee reconfig.log
+          if grep -q "Reusing cached Android support libs" reconfig.log; then
+            echo "support-libs cache reuse OK"
+          else
+            echo "::warning::support-libs were re-downloaded on reconfigure"
+          fi
+
+      - name: Build
+        run: cmake --build build-android-${{ matrix.arch }} --verbose
+
+      - name: Upload libgorp.so
+        uses: actions/upload-artifact@v4
+        with:
+          name: libgorp-${{ matrix.arch }}
+          # PACKAGE_NAME is "gorp" for QT_ANDROID builds.
+          path: build-android-${{ matrix.arch }}/libgorp.so
+          if-no-files-found: error
+
+  java-check:
+    name: java compile check
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Android platform (for android.jar)
+        uses: android-actions/setup-android@v3
+        with:
+          packages: "platforms;android-${{ env.ANDROID_API }}"
+
+      - name: Compile Java layer against android.jar + Qt stubs
+        run: |
+          bash buildandroid/ci-compile-java.sh \
+            "$ANDROID_HOME/platforms/android-${{ env.ANDROID_API }}/android.jar"
+
+  unit-tests:
+    name: android unit tests (host)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build deps
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq cmake g++
+
+      - name: Configure + build + test
+        run: |
+          cmake -S android/tests -B build-android-tests
+          cmake --build build-android-tests
+          ctest --test-dir build-android-tests --output-on-failure

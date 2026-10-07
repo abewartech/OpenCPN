@@ -31,6 +31,30 @@
 
 JavaVM* java_vm;
 
+/**
+ * RAII guard for JNI GetStringUTFChars/ReleaseStringUTFChars pairs.
+ * (Same helper exists in android/androidUTIL.cpp; kept local so this
+ * translation unit stays self-contained.)
+ */
+class JniUtfChars {
+public:
+  JniUtfChars(JNIEnv *env, jstring s) : m_env(env), m_s(s), m_chars(0) {
+    if (m_env && m_s) m_chars = m_env->GetStringUTFChars(m_s, nullptr);
+  }
+  ~JniUtfChars() {
+    if (m_env && m_s && m_chars) m_env->ReleaseStringUTFChars(m_s, m_chars);
+  }
+  JniUtfChars(const JniUtfChars &) = delete;
+  JniUtfChars &operator=(const JniUtfChars &) = delete;
+  const char *get() const { return m_chars ? m_chars : ""; }
+  operator const char *() const { return get(); }
+
+private:
+  JNIEnv *m_env;
+  jstring m_s;
+  const char *m_chars;
+};
+
 jint JNI_OnLoad(JavaVM *vm, void *reserved) {
   java_vm = vm;
   return JNI_VERSION_1_6;
@@ -86,7 +110,7 @@ wxString callActivityMethod_vs(const char *method) {
     if (java_vm->GetEnv((void **)&jenv, JNI_VERSION_1_6) != JNI_OK) {
       // qDebug() << "GetEnv failed.";
     } else {
-      const char *ret_string = (jenv)->GetStringUTFChars(s, NULL);
+      JniUtfChars ret_string((jenv), s);
       return_string = wxString(ret_string, wxConvUTF8);
     }
   }
@@ -120,7 +144,7 @@ wxString callActivityMethod_is(const char *method, int parm) {
   if (java_vm->GetEnv((void **)&jenv, JNI_VERSION_1_6) != JNI_OK) {
     // qDebug() << "GetEnv failed.";
   } else {
-    const char *ret_string = (jenv)->GetStringUTFChars(s, NULL);
+    JniUtfChars ret_string((jenv), s);
     return_string = wxString(ret_string, wxConvUTF8);
   }
 
@@ -155,7 +179,7 @@ wxString callActivityMethod_iis(const char *method, int parm1, int parm2) {
   if (java_vm->GetEnv((void **)&jenv, JNI_VERSION_1_6) != JNI_OK) {
     // qDebug() << "GetEnv failed.";
   } else {
-    const char *ret_string = (jenv)->GetStringUTFChars(s, NULL);
+    JniUtfChars ret_string((jenv), s);
     return_string = wxString(ret_string, wxConvUTF8);
   }
 
@@ -202,7 +226,7 @@ wxString callActivityMethod_ss(const char *method, wxString parm) {
   jstring s = data.object<jstring>();
 
   if ((jenv)->GetStringLength(s)) {
-    const char *ret_string = (jenv)->GetStringUTFChars(s, NULL);
+    JniUtfChars ret_string((jenv), s);
     return_string = wxString(ret_string, wxConvUTF8);
   }
 
@@ -255,7 +279,7 @@ wxString callActivityMethod_s2s(const char *method, const wxString parm1,
   jstring s = data.object<jstring>();
 
   if ((jenv)->GetStringLength(s)) {
-    const char *ret_string = (jenv)->GetStringUTFChars(s, NULL);
+    JniUtfChars ret_string((jenv), s);
     return_string = wxString(ret_string, wxConvUTF8);
   }
 
@@ -311,7 +335,7 @@ wxString callActivityMethod_s3s(const char *method, wxString parm1,
   jstring s = data.object<jstring>();
 
   if ((jenv)->GetStringLength(s)) {
-    const char *ret_string = (jenv)->GetStringUTFChars(s, NULL);
+    JniUtfChars ret_string((jenv), s);
     return_string = wxString(ret_string, wxConvUTF8);
   }
 
@@ -377,7 +401,7 @@ wxString callActivityMethod_s4s(const char *method, wxString parm1,
   jstring s = data.object<jstring>();
 
   if ((jenv)->GetStringLength(s)) {
-    const char *ret_string = (jenv)->GetStringUTFChars(s, NULL);
+    JniUtfChars ret_string((jenv), s);
     return_string = wxString(ret_string, wxConvUTF8);
   }
 
@@ -428,7 +452,7 @@ wxString callActivityMethod_s2s2i(const char *method, wxString parm1,
   jstring s = data.object<jstring>();
 
   if ((jenv)->GetStringLength(s)) {
-    const char *ret_string = (jenv)->GetStringUTFChars(s, NULL);
+    JniUtfChars ret_string((jenv), s);
     return_string = wxString(ret_string, wxConvUTF8);
   }
 
@@ -471,7 +495,7 @@ wxString callActivityMethod_ssi(const char *method, wxString parm1, int parm2) {
   jstring s = data.object<jstring>();
 
   if ((jenv)->GetStringLength(s)) {
-    const char *ret_string = (jenv)->GetStringUTFChars(s, NULL);
+    JniUtfChars ret_string((jenv), s);
     return_string = wxString(ret_string, wxConvUTF8);
   }
 
@@ -514,7 +538,7 @@ wxString callActivityMethod_ssl(const char *method, wxString parm1, long parm2) 
   jstring s = data.object<jstring>();
 
   if ((jenv)->GetStringLength(s)) {
-    const char *ret_string = (jenv)->GetStringUTFChars(s, NULL);
+    JniUtfChars ret_string((jenv), s);
     return_string = wxString(ret_string, wxConvUTF8);
   }
 
