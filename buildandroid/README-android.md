@@ -107,6 +107,11 @@ The APK is assembled in CI — no manual Qt wrangling needed:
    (`s57data`, `uidata`, `gshhs`, `styles`, `tcdata`, sounds, plugins).
 5. The APK is uploaded as the `opencpn-android-apk` artifact.
 
+Known Qt/NDK workaround (QTBUG-104580): Qt 5.15.2's `androiddeployqt`
+calls `llvm-readobj --libs`, an option removed in LLVM 14 (NDK r25+).
+The workflow shims `llvm-readobj` in the NDK to translate `--libs` into
+a `DT_NEEDED` listing via `llvm-readelf`, so dependency scanning works.
+
 Signing: without keystore secrets the workflow produces a **debug-signed**
 APK (installable, not Play-uploadable). For a release build, add these
 repository secrets and re-run — the workflow signs automatically:
