@@ -97,18 +97,17 @@ jobs:
           test -x "$QTDIR/bin/androiddeployqt"
           # aqtinstall's Qt 5.15 multi-ABI layout encodes the plugin path+ABI in
           # the filename (libplugins_platforms_qtforandroid_<abi>.so), which
-          # androiddeployqt does not understand. Provide the expected layout
-          # via symlinks.
-          mkdir -p "$QTDIR/plugins/platforms/android"
+          # androiddeployqt does not understand. Provide the expected names
+          # via symlinks directly in plugins/platforms/.
           for abi in arm64-v8a armeabi-v7a x86 x86_64; do
             src="$QTDIR/plugins/platforms/libplugins_platforms_qtforandroid_${abi}.so"
             if [ -f "$src" ]; then
-              ln -sf "../libplugins_platforms_qtforandroid_${abi}.so" \
-                "$QTDIR/plugins/platforms/android/libqtforandroid_${abi}.so"
+              ln -sf "libplugins_platforms_qtforandroid_${abi}.so" \
+                "$QTDIR/plugins/platforms/libqtforandroid_${abi}.so"
             fi
           done
-          ln -sf "libqtforandroid_arm64-v8a.so" "$QTDIR/plugins/platforms/android/libqtforandroid.so"
-          ls "$QTDIR/plugins/platforms/android/"
+          ln -sf "libqtforandroid_arm64-v8a.so" "$QTDIR/plugins/platforms/libqtforandroid.so"
+          ls "$QTDIR/plugins/platforms/" | grep qtforandroid
 
       - name: qmake + link libopencpn.so
         env:
