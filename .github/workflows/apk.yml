@@ -95,10 +95,20 @@ jobs:
           fi
           "$QTDIR/bin/qmake" -query QT_VERSION
           test -x "$QTDIR/bin/androiddeployqt"
-          echo "=== Qt plugins layout ==="
-          find "$QTDIR/plugins" -name "*qtforandroid*" 2>/dev/null | head -5
-          echo "=== Qt lib layout (sample) ==="
-          ls "$QTDIR/lib/" | grep -i "core\|gui" | head -8
+          # aqtinstall's Qt 5.15 multi-ABI layout encodes the plugin path+ABI in
+          # the filename (libplugins_platforms_qtforandroid_<abi>.so), which
+          # androiddeployqt does not understand. Provide the expected layout
+          # via symlinks.
+          mkdir -p "$QTDIR/plugins/platforms/android"
+          for abi in arm64-v8a armeabi-v7a x86 x86_64; do
+            src="$QTDIR/plugins/platforms/libplugins_platforms_qtforandroid_${abi}.so"
+            if [ -f "$src" ]; then
+              ln -sf "../libplugins_platforms_qtforandroid_${abi}.so" \
+                "$QTDIR/plugins/platforms/android/libqtforandroid_${abi}.so"
+            fi
+          done
+          ln -sf "libqtforandroid_arm64-v8a.so" "$QTDIR/plugins/platforms/android/libqtforandroid.so"
+          ls "$QTDIR/plugins/platforms/android/"
 
       - name: qmake + link libopencpn.so
         env:
@@ -138,9 +148,8 @@ jobs:
           # Shim for QTBUG-104580: emulate removed "llvm-readobj --libs".
           REAL_BIN="$(dirname "$0")/llvm-readobj.orig"
           READELF="$(dirname "$0")/llvm-readelf"
-          echo "SHIM $0 args: $*" >> /tmp/shim.log
           for arg in "$@"; do
-            if [ "$arg" = "--libs" ]; then
+            if [ "$arg" = "--libs" ] || [ "$arg" = "-needed-libs" ]; then
               for f in "$@"; do
                 case "$f" in *.so) SOFILE="$f";; esac
               done
@@ -213,7 +222,6 @@ jobs:
               --output android-build \
               --gradle || echo "ANDROIDDEPLOYQT_EXIT=$?"
           fi
-          echo "=== shim log ==="; cat /tmp/shim.log 2>/dev/null | head -20
           find android-build -name "*.apk"
 
       - name: Upload APK artifact
