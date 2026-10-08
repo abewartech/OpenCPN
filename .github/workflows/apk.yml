@@ -152,7 +152,9 @@ jobs:
               for f in "$@"; do
                 case "$f" in *.so) SOFILE="$f";; esac
               done
-              "$READELF" -d "$SOFILE" 2>/dev/null | grep -o '\[.*\]' | tr -d '[]'
+              echo "NeededLibraries ["
+              "$READELF" -d "$SOFILE" 2>/dev/null | grep -o '\[.*\]' | tr -d '[]' | sed 's/^/  /'
+              echo "]"
               exit 0
             fi
           done
