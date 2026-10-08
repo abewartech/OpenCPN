@@ -119,21 +119,24 @@ jobs:
           python3 - << 'PYEOF'
           import os, shutil
           ndk_bin = os.environ["NDK_BIN"]
-          real = os.path.join(ndk_bin, "llvm-readobj.real")
+          orig = os.path.join(ndk_bin, "llvm-readobj.orig")
           shim = os.path.join(ndk_bin, "llvm-readobj")
+          real = os.path.join(ndk_bin, "llvm-readobj.real")
           readelf_link = os.path.join(ndk_bin, "llvm-readelf")
-          if not os.path.exists(real):
-              os.rename(shim, real)
-              # llvm-readelf is a symlink to llvm-readobj; after the rename it
-              # would point at the shim. Replace it with a real copy.
+          if not os.path.exists(orig):
+              # Back up the original binary. Note: llvm-readelf is a symlink
+              # to llvm-readobj, so copy (not rename) to keep it intact.
+              shutil.copy2(shim, orig)
+              # Replace the llvm-readelf symlink with a real copy pointing at
+              # the original binary, so it never resolves to the shim.
               if os.path.islink(readelf_link):
                   os.unlink(readelf_link)
-                  shutil.copy2(real, readelf_link)
-                  print("llvm-readelf symlink replaced with real binary")
+                  shutil.copy2(orig, readelf_link)
+              print("original llvm-readobj backed up")
           # Raw string: backslashes pass through literally to the shell script.
           shim_code = r'''#!/bin/bash
           # Shim for QTBUG-104580: emulate removed "llvm-readobj --libs".
-          REAL_BIN="$(dirname "$0")/llvm-readobj.real"
+          REAL_BIN="$(dirname "$0")/llvm-readobj.orig"
           READELF="$(dirname "$0")/llvm-readelf"
           for arg in "$@"; do
             if [ "$arg" = "--libs" ]; then
@@ -146,10 +149,13 @@ jobs:
           done
           exec "$REAL_BIN" "$@"
           '''
-          with open(shim, "w") as f:
-              f.write(shim_code)
-          os.chmod(shim, 0o755)
-          print("shim installed")
+          # Install the shim under both names androiddeployqt might use.
+          for name in ["llvm-readobj", "llvm-readobj.real"]:
+              p = os.path.join(ndk_bin, name)
+              with open(p, "w") as f:
+                  f.write(shim_code)
+              os.chmod(p, 0o755)
+          print("shim installed (both names)")
           PYEOF
           echo "--- shim content ---"
           cat "$NDK_BIN/llvm-readobj"
