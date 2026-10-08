@@ -31,8 +31,8 @@
 #endif
 
 
-#include "chart1.h"
-//#include "myapp.h"
+#include "gui/ocpn_app.h"
+// (was "chart1.h" in the 2014-era tree; MyApp now lives in gui/include/gui/)
 
 IMPLEMENT_APP_NO_MAIN(MyApp);
 //IMPLEMENT_APP(MyApp);

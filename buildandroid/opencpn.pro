@@ -27,6 +27,8 @@ TEMPLATE = app
 INCLUDEPATH += $${wxQt_Base}/include/
 
 INCLUDEPATH += $${OCPN_Base}/include/
+INCLUDEPATH += $${OCPN_Base}/gui/include/
+INCLUDEPATH += $${OCPN_Base}/model/include/
 INCLUDEPATH += $${OCPN_Base}/src/nmea0183
 
 

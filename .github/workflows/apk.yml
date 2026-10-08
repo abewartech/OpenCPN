@@ -112,7 +112,8 @@ jobs:
             "wxQt_Base=$SUPPORT/wxWidgets" \
             "wxQt_Build=libs/arm64" \
             "OCPN_Base=$GITHUB_WORKSPACE" \
-            "OCPN_Build=$GITHUB_WORKSPACE/build-android-arm64" \
+            "OCPN_Build=build-android-arm64" \
+            "ANDROID_ABIS=arm64-v8a" \
             "ANDROID_EXTRA_LIBS=$GITHUB_WORKSPACE/build-android-arm64/libgorp.so $CXXSTL" \
             "CONFIG+=release" \
             ../opencpn.pro
