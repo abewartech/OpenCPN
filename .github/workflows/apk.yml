@@ -191,6 +191,12 @@ jobs:
           make install INSTALL_ROOT="$PWD/android-build" >/dev/null
           test -f android-build/libs/arm64-v8a/libopencpn_arm64-v8a.so
 
+      - name: Set up JDK 11 for androiddeployqt (Gradle)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "11"
+
       - name: androiddeployqt (package APK)
         env:
           ANDROID_NDK_ROOT: ${{ env.ANDROID_HOME }}/ndk/${{ env.NDK_VERSION }}
