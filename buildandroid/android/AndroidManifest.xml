@@ -121,11 +121,9 @@
          prompts the user to grant this in system settings when a chart
          directory outside the app sandbox is selected. -->
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"/>
-    <uses-permission android:name="android.permission.INTERNET"/>
-    <!-- Legacy external-storage write; only effective on API <= 28. Scoped
-         storage + SAF are used on modern Android. -->
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
-                     android:maxSdkVersion="28"/>
+    <!-- INTERNET and WRITE_EXTERNAL_STORAGE are already added by Qt's
+         androiddeployqt template; declaring them here would cause
+         manifest-merger "duplicated with element" errors. -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE"/>
