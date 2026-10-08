@@ -216,6 +216,7 @@ jobs:
             "$QTDIR/bin/androiddeployqt" \
               --input "$SETTINGS_JSON" \
               --output android-build \
+              --android-platform "android-${{ env.ANDROID_API }}" \
               --gradle \
               --release \
               --sign /tmp/release.keystore "$APK_KEY_ALIAS" \
@@ -227,6 +228,7 @@ jobs:
             "$QTDIR/bin/androiddeployqt" \
               --input "$SETTINGS_JSON" \
               --output android-build \
+              --android-platform "android-${{ env.ANDROID_API }}" \
               --gradle || echo "ANDROIDDEPLOYQT_EXIT=$?"
           fi
           find android-build -name "*.apk"
