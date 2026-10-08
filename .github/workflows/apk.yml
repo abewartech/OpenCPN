@@ -187,14 +187,14 @@ jobs:
               --release \
               --sign /tmp/release.keystore "$APK_KEY_ALIAS" \
               --storepass "$APK_KEYSTORE_PASSWORD" \
-              --keypass "${APK_KEY_PASSWORD:-$APK_KEYSTORE_PASSWORD}"
+              --keypass "${APK_KEY_PASSWORD:-$APK_KEYSTORE_PASSWORD}" || echo "ANDROIDDEPLOYQT_EXIT=$?"
             rm -f /tmp/release.keystore
           else
             echo "No keystore secret: building debug-signed APK"
             "$QTDIR/bin/androiddeployqt" \
               --input "$SETTINGS_JSON" \
               --output android-build \
-              --gradle
+              --gradle || echo "ANDROIDDEPLOYQT_EXIT=$?"
           fi
           echo "=== shim debug log ==="
           cat /tmp/shim-debug.log 2>/dev/null || echo "(no shim calls logged)"
