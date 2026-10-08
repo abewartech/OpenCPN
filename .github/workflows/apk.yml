@@ -127,6 +127,9 @@ jobs:
           shim_code = r'''#!/bin/bash
           REAL_BIN="$(dirname "$0")/llvm-readobj.real"
           READELF="$(dirname "$0")/llvm-readelf"
+          echo "SHIM CALLED: $0 | args: $*" >> /tmp/shim-debug.log
+          echo "SHIM $1=" >> /tmp/shim-debug.log
+          printf '%s' "$1" | od -c >> /tmp/shim-debug.log
           if [ "$1" = "--libs" ]; then
             shift
             "$READELF" -d "$1" 2>/dev/null | grep -o '\[.*\]' | tr -d '[]'
@@ -193,6 +196,8 @@ jobs:
               --output android-build \
               --gradle
           fi
+          echo "=== shim debug log ==="
+          cat /tmp/shim-debug.log 2>/dev/null || echo "(no shim calls logged)"
           find android-build -name "*.apk"
 
       - name: Upload APK artifact
