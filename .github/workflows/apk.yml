@@ -56,7 +56,7 @@ jobs:
           packages: >-
             ndk;${{ env.NDK_VERSION }}
             platforms;android-${{ env.ANDROID_API }}
-            build-tools;35.0.0
+            build-tools;30.0.3
             platform-tools
 
       - name: Cache Android support bundle
