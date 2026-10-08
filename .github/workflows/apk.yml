@@ -117,23 +117,25 @@ jobs:
           # avoid heredoc quoting pitfalls.
           export NDK_BIN
           python3 - << 'PYEOF'
-          import os, stat
+          import os
           ndk_bin = os.environ["NDK_BIN"]
           real = os.path.join(ndk_bin, "llvm-readobj.real")
           shim = os.path.join(ndk_bin, "llvm-readobj")
-          readelf = os.path.join(ndk_bin, "llvm-readelf")
           if not os.path.exists(real):
               os.rename(shim, real)
+          # Raw string: backslashes pass through literally to the shell script.
+          shim_code = r'''#!/bin/bash
+          REAL_BIN="$(dirname "$0")/llvm-readobj.real"
+          READELF="$(dirname "$0")/llvm-readelf"
+          if [ "$1" = "--libs" ]; then
+            shift
+            "$READELF" -d "$1" 2>/dev/null | grep -o '\[.*\]' | tr -d '[]'
+            exit 0
+          fi
+          exec "$REAL_BIN" "$@"
+          '''
           with open(shim, "w") as f:
-              f.write("#!/bin/bash\n")
-              f.write('REAL_BIN="$(dirname "$0")/llvm-readobj.real"\n')
-              f.write('READELF="$(dirname "$0")/llvm-readelf"\n')
-              f.write('if [ "$1" = "--libs" ]; then\n')
-              f.write('  shift\n')
-              f.write('  "$READELF" -d "$1" 2>&1 | sed -n \'s/.*(NEEDED).*\\[\\(.*\\)\\].*/\\1/p\'\n')
-              f.write('  exit 0\n')
-              f.write('fi\n')
-              f.write('exec "$REAL_BIN" "$@"\n')
+              f.write(shim_code)
           os.chmod(shim, 0o755)
           print("shim installed")
           PYEOF
