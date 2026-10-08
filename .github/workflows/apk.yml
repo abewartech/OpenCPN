@@ -197,6 +197,18 @@ jobs:
           distribution: temurin
           java-version: "11"
 
+      - name: Fix NDK r26 toolchain symlinks (QTBUG old AGP)
+        run: |
+          # Old Android Gradle Plugin (via Qt 5.15 androiddeployqt) expects
+          # GNU toolchain names; NDK r26 only ships LLVM tools.
+          BIN="$ANDROID_HOME/ndk/${{ env.NDK_VERSION }}/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          for arch in aarch64-linux-android armv7a-linux-androideabi x86_64-linux-android i686-linux-android; do
+            ln -sf llvm-strip "$BIN/$arch-strip" 2>/dev/null || sudo ln -sf llvm-strip "$BIN/$arch-strip"
+            ln -sf llvm-objcopy "$BIN/$arch-objcopy" 2>/dev/null || sudo ln -sf llvm-objcopy "$BIN/$arch-objcopy"
+            ln -sf llvm-readelf "$BIN/$arch-readelf" 2>/dev/null || sudo ln -sf llvm-readelf "$BIN/$arch-readelf"
+          done
+          ls "$BIN" | grep -E "strip|objcopy" | head -8
+
       - name: androiddeployqt (package APK)
         env:
           ANDROID_NDK_ROOT: ${{ env.ANDROID_HOME }}/ndk/${{ env.NDK_VERSION }}
