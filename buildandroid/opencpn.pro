@@ -34,7 +34,7 @@ LIBS += -L$${wxQt_Base}/$${wxQt_Build}/lib
 LIBS += -L$${OCPN_Base}/$${OCPN_Build}
 
 
-LIBS += $${OCPN_Base}/$${OCPN_Build}/libgorp.a
+LIBS += -L$${OCPN_Base}/$${OCPN_Build} -lgorp
 
 INCLUDEPATH += $${wxQt_Base}/$${wxQt_Build}/lib/wx/include/arm-linux-androideabi-qt-unicode-static-3.1
 
@@ -51,7 +51,9 @@ LIBS += $${wxQt_Base}/$${wxQt_Build}/lib/libwxjpeg-3.1-arm-linux-androideabi.a
 LIBS += $${wxQt_Base}/$${wxQt_Build}/lib/libwxpng-3.1-arm-linux-androideabi.a
 LIBS += $${wxQt_Base}/$${wxQt_Build}/lib/libwx_qtu_gl-3.1-arm-linux-androideabi.a
 LIBS += $${wxQt_Base}/$${wxQt_Build}/lib/libwx_baseu_net-3.1-arm-linux-androideabi.a
-LIBS += $${OCPN_Base}/$${OCPN_Build}/lib/libGL.a
+# libGL.a was part of David Register's local build tree; the NDK provides
+# EGL/GLES system libs, so it is not needed (and not produced by CMake).
+# LIBS += $${OCPN_Base}/$${OCPN_Build}/lib/libGL.a
 
 #LIBS += $${OCPN_Base}/$${OCPN_Build}/lib/libGLU.a
 #LIBS += $${OCPN_Base}/$${OCPN_Build}/lib/libGLUES.a
@@ -68,7 +70,7 @@ contains(wxQt_Build,53)
 }
 
 
-TARGETDEPS += $${OCPN_Base}/$${OCPN_Build}/libgorp.a
+TARGETDEPS += $${OCPN_Base}/$${OCPN_Build}/libgorp.so
 
 TARGETDEPS += $${wxQt_Base}/$${wxQt_Build}/lib/libwx_baseu-3.1-arm-linux-androideabi.a
 TARGETDEPS += $${wxQt_Base}/$${wxQt_Build}/lib/libwx_qtu_core-3.1-arm-linux-androideabi.a
@@ -85,7 +87,9 @@ CONFIG += mobility
 CONFIG += debug
 MOBILITY =
 
-ANDROID_EXTRA_LIBS = $$PWD/../buildandroid/assetbridge/libs/armeabi/libassetbridge.so
+# The assetbridge helper .so was never committed; keep the variable empty
+# rather than pointing at a nonexistent file.
+# ANDROID_EXTRA_LIBS = $$PWD/../buildandroid/assetbridge/libs/armeabi/libassetbridge.so
 
 # To execute the assetbridge runtime code, we make a custom modification to the android Activity method.
 
@@ -168,8 +172,9 @@ INSTALLS += wmm_plugin_deployment
 
 
 
-ANDROID_EXTRA_LIBS = \
-        /home/dsr/Projects/opencpn_android/buildandroid/../buildandroid/assetbridge/libs/armeabi/libassetbridge.so
+# Shared libs bundled into the APK. The corelib is always needed;
+# CI appends the NDK libc++_shared.so via the qmake command line.
+isEmpty(ANDROID_EXTRA_LIBS): ANDROID_EXTRA_LIBS = $${OCPN_Base}/$${OCPN_Build}/libgorp.so
 
 
 #ANDROID_EXTRA_LIBS += /home/dsr/Projects/opencpn_sf/opencpn/build_android_53/plugins/dashboard_pi/libdashboard_pi.so

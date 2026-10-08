@@ -85,18 +85,40 @@ ctest --test-dir build-android-tests --output-on-failure
 Covers: `getSystemDirs()` contract parsing, SAF tree-URI handling, CM93
 dataset directory validation.
 
-## 6. Assembling the APK (manual, Qt 5.15)
+## 6. Assembling the APK (automated: `.github/workflows/apk.yml`)
 
-The APK wrapper needs Qt 5.15 for Android and the wxQt-for-Android stack from
-`OCPNAndroidCoreBuildSupport`; that combination is documented here but not
-executed in CI:
+The APK is assembled in CI — no manual Qt wrangling needed:
 
-1. Build/install Qt 5.15.x for Android (arm64) or reuse the prebuilt Qt in the
-   support bundle (`cache/OCPNAndroidCoreBuildSupport/qt5/build_arm64_O3`).
-2. Place `libgorp.so` where `androiddeployqt` expects the app lib (renamed to match `android:extractNativeLibs` config if needed).
-3. Run `androiddeployqt --input android-libopencpn.so-deployment-settings.json
-   --output android-build` from `buildandroid/android`.
-4. Sign with your own keystore (`apksigner`).
+1. CMake builds `libgorp.so` (arm64) exactly as in §3 (the support bundle's
+   wxQt static libs are reused from `cache/`).
+2. Qt **5.15.2** for Android (`android_arm64_v8a`) is installed via
+   `aqtinstall`.
+3. `qmake` links `libopencpn.so` from `ocpn_wrapper.cpp` + the wxQt static
+   libs + `libgorp.so`, using `buildandroid/opencpn.pro` with the
+   `wxQt_Base` / `wxQt_Build` / `OCPN_Base` / `OCPN_Build` variables supplied
+   on the command line (the `.pro` no longer contains machine-specific
+   `/home/dsr` paths; `libgorp.a` was replaced by the shared `libgorp.so`,
+   which `androiddeployqt` bundles via `ANDROID_EXTRA_LIBS`).
+4. `androiddeployqt --gradle` packages the APK from
+   `buildandroid/android/` (`ANDROID_PACKAGE_SOURCE_DIR`, manifest
+   `org.opencpn.opencpn`), bundling `libopencpn.so`, `libgorp.so`,
+   `libc++_shared.so`, the Qt libs, and the asset packs from the `.pro`
+   (`s57data`, `uidata`, `gshhs`, `styles`, `tcdata`, sounds, plugins).
+5. The APK is uploaded as the `opencpn-android-apk` artifact.
+
+Signing: without keystore secrets the workflow produces a **debug-signed**
+APK (installable, not Play-uploadable). For a release build, add these
+repository secrets and re-run — the workflow signs automatically:
+
+| Secret | Content |
+|---|---|
+| `APK_KEYSTORE_BASE64` | keystore file, base64-encoded |
+| `APK_KEY_ALIAS` | key alias |
+| `APK_KEYSTORE_PASSWORD` | keystore password |
+| `APK_KEY_PASSWORD` | key password (optional, defaults to keystore password) |
+
+To reproduce the APK steps locally, follow the job steps in
+`.github/workflows/apk.yml` top to bottom on Ubuntu 22.04.
 
 Manifest notes (`buildandroid/android/AndroidManifest.xml`):
 
@@ -115,8 +137,12 @@ Manifest notes (`buildandroid/android/AndroidManifest.xml`):
 `.github/workflows/android.yml` runs on every push/PR touching Android-related
 paths:
 
-- `corelib` (arm64, armhf): full NDK build, uploads `libopencpn.so`.
+- `corelib` (arm64, armhf): full NDK build, uploads `libgorp.so`.
 - `java-check`: the script from §4.
 - `unit-tests`: the tests from §5.
+
+`.github/workflows/apk.yml` assembles the APK (see §6). It runs manually
+(`workflow_dispatch`), on version tags (`v*`), and on pushes to `master`
+touching the Android build inputs.
 
 A red build fails the job; warnings are not suppressed.
