@@ -86,11 +86,6 @@
             <meta-data android:name="android.app.lib_name" android:value="opencpn"/>
         </activity>
 
-        <activity android:name="org.opencpn.OCPNMapsActivity"
-                  android:exported="false">
-            <meta-data android:name="android.app.lib_name" android:value="opencpn"/>
-        </activity>
-
         <activity android:name="org.opencpn.WebViewActivity"
                   android:theme="@style/Theme.OCPN.NoTitleBar"
                   android:exported="false">
