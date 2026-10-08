@@ -117,21 +117,26 @@ jobs:
           # avoid heredoc quoting pitfalls.
           export NDK_BIN
           python3 - << 'PYEOF'
-          import os
+          import os, shutil
           ndk_bin = os.environ["NDK_BIN"]
           real = os.path.join(ndk_bin, "llvm-readobj.real")
           shim = os.path.join(ndk_bin, "llvm-readobj")
+          readelf_link = os.path.join(ndk_bin, "llvm-readelf")
           if not os.path.exists(real):
               os.rename(shim, real)
+              # llvm-readelf is a symlink to llvm-readobj; after the rename it
+              # would point at the shim. Replace it with a real copy.
+              if os.path.islink(readelf_link):
+                  os.unlink(readelf_link)
+                  shutil.copy2(real, readelf_link)
+                  print("llvm-readelf symlink replaced with real binary")
           # Raw string: backslashes pass through literally to the shell script.
           shim_code = r'''#!/bin/bash
+          # Shim for QTBUG-104580: emulate removed "llvm-readobj --libs".
           REAL_BIN="$(dirname "$0")/llvm-readobj.real"
           READELF="$(dirname "$0")/llvm-readelf"
-          echo "SHIM CALLED: $0 | args: $*" >> /tmp/shim-debug.log
-          # Check if ANY argument is --libs (androiddeployqt may pass other args first)
           for arg in "$@"; do
             if [ "$arg" = "--libs" ]; then
-              # Find the .so file (last arg that looks like a file)
               for f in "$@"; do
                 case "$f" in *.so) SOFILE="$f";; esac
               done
@@ -201,8 +206,6 @@ jobs:
               --output android-build \
               --gradle || echo "ANDROIDDEPLOYQT_EXIT=$?"
           fi
-          echo "=== shim debug log ==="
-          cat /tmp/shim-debug.log 2>/dev/null || echo "(no shim calls logged)"
           find android-build -name "*.apk"
 
       - name: Upload APK artifact
