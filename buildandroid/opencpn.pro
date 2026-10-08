@@ -29,7 +29,23 @@ INCLUDEPATH += $${wxQt_Base}/include/
 INCLUDEPATH += $${OCPN_Base}/include/
 INCLUDEPATH += $${OCPN_Base}/gui/include/
 INCLUDEPATH += $${OCPN_Base}/model/include/
-INCLUDEPATH += $${OCPN_Base}/src/nmea0183
+# Extra include dirs to compile ocpn_wrapper.cpp against the modular
+# codebase (mirrors the gorp CMake target's includes).
+INCLUDEPATH += $${OCPN_Base}/libs/nmea0183/src
+INCLUDEPATH += $${OCPN_Base}/libs/observable/include
+INCLUDEPATH += $${OCPN_Base}/libs/N2KParser/include
+INCLUDEPATH += $${OCPN_Base}/libs/std_filesystem/include
+INCLUDEPATH += $${OCPN_Base}/libs/pugixml
+INCLUDEPATH += $${OCPN_Base}/libs/geoprim/src
+INCLUDEPATH += $${OCPN_Base}/libs/s52plib/src
+INCLUDEPATH += $${OCPN_Base}/libs/wxJSON/include
+INCLUDEPATH += $${OCPN_Base}/libs/nlohmann-json/include
+INCLUDEPATH += $${OCPN_Base}/libs/gui/include
+INCLUDEPATH += $${OCPN_Base}/libs/IXWebSocket
+INCLUDEPATH += $${OCPN_Base}/buildandroid/libexpat/include
+INCLUDEPATH += $${OCPN_Build}/_deps/rapidjson_src-src/include
+INCLUDEPATH += $${OCPN_Build}/_deps/json-src/include
+INCLUDEPATH += $${OCPN_Build}/include
 
 
 LIBS += -L$${wxQt_Base}/$${wxQt_Build}/lib
