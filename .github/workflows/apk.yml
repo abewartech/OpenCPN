@@ -1,0 +1,253 @@
+# Android APK — assembles an installable APK with Qt androiddeployqt.
+#
+# Pipeline:
+#   1. CMake builds the native corelib (libgorp.so, arm64) + plugin .so files.
+#   2. qmake links libopencpn.so from ocpn_wrapper.cpp + wxQt static libs
+#      (from OCPNAndroidCoreBuildSupport) + libgorp.so + Qt 5.15.2.
+#   3. androiddeployqt packages the APK (debug-signed by default; release-signed
+#      when keystore secrets are present).
+#
+# Triggers: manual (workflow_dispatch), version tags, and pushes to master
+# touching the Android build inputs.
+
+name: APK
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+    branches: [master]
+    paths:
+      - "buildandroid/**"
+      - "android/**"
+      - "gui/**"
+      - "model/**"
+      - "libs/**"
+      - "include/**"
+      - "CMakeLists.txt"
+      - ".github/workflows/apk.yml"
+
+env:
+  NDK_VERSION: "26.1.10909125"
+  ANDROID_API: "30"
+  QT_VERSION: "5.15.2"
+
+jobs:
+  apk:
+    name: build APK (arm64)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake ninja-build gettext python3-pip
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Android SDK + NDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: >-
+            ndk;${{ env.NDK_VERSION }}
+            platforms;android-${{ env.ANDROID_API }}
+            build-tools;30.0.3
+            platform-tools
+
+      - name: Cache Android support bundle
+        uses: actions/cache@v4
+        with:
+          path: cache
+          key: ocpn-android-support-v1.2
+
+      - name: Cache Qt
+        uses: actions/cache@v4
+        with:
+          path: ~/Qt
+          key: qt-${{ env.QT_VERSION }}-android-multi-abi
+
+      - name: Build native corelib (arm64)
+        run: |
+          TOOL_BASE="$ANDROID_HOME/ndk/${{ env.NDK_VERSION }}/toolchains/llvm/prebuilt/linux-x86_64"
+          cmake -S . -B build-android-arm64 -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            "-DOCPN_TARGET_TUPLE:STRING=Android-arm64;21;arm64" \
+            -Dtool_base="$TOOL_BASE" \
+            -DOCPN_BUILD_TEST=OFF \
+            -DOCPN_BUNDLE_DOCS=OFF
+          cmake --build build-android-arm64
+          test -f build-android-arm64/libgorp.so
+          ls build-android-arm64/plugins/*/*.so
+
+      - name: Install Qt ${{ env.QT_VERSION }} for Android
+        run: |
+          QTDIR="$HOME/Qt/${{ env.QT_VERSION }}/android"
+          if [ ! -x "$QTDIR/bin/qmake" ]; then
+            pip install -q aqtinstall
+            # Qt 5.15 ships Android as one multi-ABI package ("android"),
+            # not per-ABI packages like android_arm64_v8a.
+            aqt install-qt linux android "${{ env.QT_VERSION }}" android -O "$HOME/Qt"
+          fi
+          "$QTDIR/bin/qmake" -query QT_VERSION
+          test -x "$QTDIR/bin/androiddeployqt"
+          # aqtinstall's Qt 5.15 multi-ABI layout encodes the plugin path+ABI in
+          # the filename (libplugins_platforms_qtforandroid_<abi>.so), which
+          # androiddeployqt does not understand. Provide the expected names
+          # via symlinks directly in plugins/platforms/.
+          for abi in arm64-v8a armeabi-v7a x86 x86_64; do
+            src="$QTDIR/plugins/platforms/libplugins_platforms_qtforandroid_${abi}.so"
+            if [ -f "$src" ]; then
+              ln -sf "libplugins_platforms_qtforandroid_${abi}.so" \
+                "$QTDIR/plugins/platforms/libqtforandroid_${abi}.so"
+            fi
+          done
+          ln -sf "libqtforandroid_arm64-v8a.so" "$QTDIR/plugins/platforms/libqtforandroid.so"
+          ls "$QTDIR/plugins/platforms/" | grep qtforandroid
+
+      - name: qmake + link libopencpn.so
+        env:
+          ANDROID_NDK_ROOT: ${{ env.ANDROID_HOME }}/ndk/${{ env.NDK_VERSION }}
+        run: |
+          QTDIR="$HOME/Qt/${{ env.QT_VERSION }}/android"
+          SUPPORT="$GITHUB_WORKSPACE/cache/OCPNAndroidCoreBuildSupport"
+          NDK="$ANDROID_HOME/ndk/${{ env.NDK_VERSION }}"
+          NDK_BIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          test -d "$SUPPORT/wxWidgets/libs/arm64/lib" || { echo "::error::wxQt libs missing in support bundle"; exit 1; }
+          CXXSTL="$NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so"
+          test -f "$CXXSTL" || { echo "::error::libc++_shared.so missing"; exit 1; }
+          # QTBUG-104580: Qt 5.15.2 androiddeployqt calls "llvm-readobj --libs",
+          # an option removed in LLVM 14 (NDK r25+). Shim it: translate --libs
+          # into a DT_NEEDED listing via llvm-readelf. Written via python3 to
+          # avoid heredoc quoting pitfalls.
+          export NDK_BIN
+          python3 - << 'PYEOF'
+          import os, shutil
+          ndk_bin = os.environ["NDK_BIN"]
+          orig = os.path.join(ndk_bin, "llvm-readobj.orig")
+          shim = os.path.join(ndk_bin, "llvm-readobj")
+          real = os.path.join(ndk_bin, "llvm-readobj.real")
+          readelf_link = os.path.join(ndk_bin, "llvm-readelf")
+          if not os.path.exists(orig):
+              # Back up the original binary. Note: llvm-readelf is a symlink
+              # to llvm-readobj, so copy (not rename) to keep it intact.
+              shutil.copy2(shim, orig)
+              # Replace the llvm-readelf symlink with a real copy pointing at
+              # the original binary, so it never resolves to the shim.
+              if os.path.islink(readelf_link):
+                  os.unlink(readelf_link)
+                  shutil.copy2(orig, readelf_link)
+              print("original llvm-readobj backed up")
+          # Raw string: backslashes pass through literally to the shell script.
+          shim_code = r'''#!/bin/bash
+          # Shim for QTBUG-104580: emulate removed "llvm-readobj --libs".
+          REAL_BIN="$(dirname "$0")/llvm-readobj.orig"
+          READELF="$(dirname "$0")/llvm-readelf"
+          for arg in "$@"; do
+            if [ "$arg" = "--libs" ] || [ "$arg" = "-needed-libs" ]; then
+              for f in "$@"; do
+                case "$f" in *.so) SOFILE="$f";; esac
+              done
+              echo "NeededLibraries ["
+              "$READELF" -d "$SOFILE" 2>/dev/null | grep -o '\[.*\]' | tr -d '[]' | sed 's/^/  /'
+              echo "]"
+              exit 0
+            fi
+          done
+          exec "$REAL_BIN" "$@"
+          '''
+          # Install the shim under both names androiddeployqt might use.
+          for name in ["llvm-readobj", "llvm-readobj.real"]:
+              p = os.path.join(ndk_bin, name)
+              with open(p, "w") as f:
+                  f.write(shim_code)
+              os.chmod(p, 0o755)
+          print("shim installed (both names)")
+          PYEOF
+          echo "--- shim content ---"
+          cat "$NDK_BIN/llvm-readobj"
+          echo "--- shim test ---"
+          "$NDK_BIN/llvm-readobj" --libs "$GITHUB_WORKSPACE/build-android-arm64/libgorp.so" | head -5
+          rm -rf buildandroid/apk-build && mkdir -p buildandroid/apk-build
+          cd buildandroid/apk-build
+          "$QTDIR/bin/qmake" \
+            "wxQt_Base=$SUPPORT/wxWidgets" \
+            "wxQt_Build=libs/arm64" \
+            "OCPN_Base=$GITHUB_WORKSPACE" \
+            "OCPN_Build=build-android-arm64" \
+            "ANDROID_ABIS=arm64-v8a" \
+            "ANDROID_EXTRA_LIBS=$GITHUB_WORKSPACE/build-android-arm64/libgorp.so $CXXSTL" \
+            "CONFIG+=release" \
+            ../opencpn.pro
+          make -j"$(nproc)"
+          # Qt 5.15 multi-ABI appends the ABI to the lib name.
+          test -f libopencpn_arm64-v8a.so
+          # androiddeployqt expects the app binary under
+          # android-build/libs/<abi>/ — populated by make install.
+          make install INSTALL_ROOT="$PWD/android-build" >/dev/null
+          test -f android-build/libs/arm64-v8a/libopencpn_arm64-v8a.so
+
+      - name: Set up JDK 11 for androiddeployqt (Gradle)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "11"
+
+      - name: Fix NDK r26 toolchain symlinks (QTBUG old AGP)
+        run: |
+          # Old Android Gradle Plugin (via Qt 5.15 androiddeployqt) expects
+          # GNU toolchain names; NDK r26 only ships LLVM tools.
+          BIN="$ANDROID_HOME/ndk/${{ env.NDK_VERSION }}/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          for arch in aarch64-linux-android armv7a-linux-androideabi x86_64-linux-android i686-linux-android; do
+            ln -sf llvm-strip "$BIN/$arch-strip" 2>/dev/null || sudo ln -sf llvm-strip "$BIN/$arch-strip"
+            ln -sf llvm-objcopy "$BIN/$arch-objcopy" 2>/dev/null || sudo ln -sf llvm-objcopy "$BIN/$arch-objcopy"
+            ln -sf llvm-readelf "$BIN/$arch-readelf" 2>/dev/null || sudo ln -sf llvm-readelf "$BIN/$arch-readelf"
+          done
+          ls "$BIN" | grep -E "strip|objcopy" | head -8
+
+      - name: androiddeployqt (package APK)
+        env:
+          ANDROID_NDK_ROOT: ${{ env.ANDROID_HOME }}/ndk/${{ env.NDK_VERSION }}
+          APK_KEYSTORE_BASE64: ${{ secrets.APK_KEYSTORE_BASE64 }}
+          APK_KEYSTORE_PASSWORD: ${{ secrets.APK_KEYSTORE_PASSWORD }}
+          APK_KEY_PASSWORD: ${{ secrets.APK_KEY_PASSWORD }}
+          APK_KEY_ALIAS: ${{ secrets.APK_KEY_ALIAS }}
+        run: |
+          QTDIR="$HOME/Qt/${{ env.QT_VERSION }}/android"
+          cd buildandroid/apk-build
+          # Deployment-settings file name as generated by Qt 5.15 qmake.
+          SETTINGS_JSON=android-opencpn-deployment-settings.json
+          test -f "$SETTINGS_JSON" || { echo "::error::$SETTINGS_JSON not found"; ls; exit 1; }
+          if [ -n "$APK_KEYSTORE_BASE64" ]; then
+            echo "Keystore secret present: building signed release APK"
+            echo "$APK_KEYSTORE_BASE64" | base64 -d > /tmp/release.keystore
+            "$QTDIR/bin/androiddeployqt" \
+              --input "$SETTINGS_JSON" \
+              --output android-build \
+              --android-platform "android-${{ env.ANDROID_API }}" \
+              --gradle \
+              --release \
+              --sign /tmp/release.keystore "$APK_KEY_ALIAS" \
+              --storepass "$APK_KEYSTORE_PASSWORD" \
+              --keypass "${APK_KEY_PASSWORD:-$APK_KEYSTORE_PASSWORD}" || echo "ANDROIDDEPLOYQT_EXIT=$?"
+            rm -f /tmp/release.keystore
+          else
+            echo "No keystore secret: building debug-signed APK"
+            "$QTDIR/bin/androiddeployqt" \
+              --input "$SETTINGS_JSON" \
+              --output android-build \
+              --android-platform "android-${{ env.ANDROID_API }}" \
+              --gradle || echo "ANDROIDDEPLOYQT_EXIT=$?"
+          fi
+          find android-build -name "*.apk"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: opencpn-android-apk
+          path: buildandroid/apk-build/android-build/build/outputs/apk/**/*.apk
+          if-no-files-found: error
