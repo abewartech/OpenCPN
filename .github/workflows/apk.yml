@@ -118,7 +118,7 @@ jobs:
           test -f libopencpn.so
 
       - name: androiddeployqt (debug APK)
-        if: ${{ !secrets.APK_KEYSTORE_BASE64 }}
+        if: ${{ secrets.APK_KEYSTORE_BASE64 == '' }}
         run: |
           QTDIR="$HOME/Qt/${{ env.QT_VERSION }}/android"
           cd buildandroid/apk-build
@@ -129,7 +129,7 @@ jobs:
           find android-build -name "*.apk"
 
       - name: androiddeployqt (signed release APK)
-        if: ${{ secrets.APK_KEYSTORE_BASE64 }}
+        if: ${{ secrets.APK_KEYSTORE_BASE64 != '' }}
         env:
           APK_KEYSTORE_PASSWORD: ${{ secrets.APK_KEYSTORE_PASSWORD }}
           APK_KEY_PASSWORD: ${{ secrets.APK_KEY_PASSWORD }}
