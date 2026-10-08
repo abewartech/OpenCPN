@@ -138,6 +138,7 @@ jobs:
           # Shim for QTBUG-104580: emulate removed "llvm-readobj --libs".
           REAL_BIN="$(dirname "$0")/llvm-readobj.orig"
           READELF="$(dirname "$0")/llvm-readelf"
+          echo "SHIM $0 args: $*" >> /tmp/shim.log
           for arg in "$@"; do
             if [ "$arg" = "--libs" ]; then
               for f in "$@"; do
@@ -212,6 +213,7 @@ jobs:
               --output android-build \
               --gradle || echo "ANDROIDDEPLOYQT_EXIT=$?"
           fi
+          echo "=== shim log ==="; cat /tmp/shim.log 2>/dev/null | head -20
           find android-build -name "*.apk"
 
       - name: Upload APK artifact
