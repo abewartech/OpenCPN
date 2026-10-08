@@ -95,6 +95,10 @@ jobs:
           fi
           "$QTDIR/bin/qmake" -query QT_VERSION
           test -x "$QTDIR/bin/androiddeployqt"
+          echo "=== Qt plugins layout ==="
+          find "$QTDIR/plugins" -name "*qtforandroid*" 2>/dev/null | head -5
+          echo "=== Qt lib layout (sample) ==="
+          ls "$QTDIR/lib/" | grep -i "core\|gui" | head -8
 
       - name: qmake + link libopencpn.so
         env:
@@ -109,24 +113,33 @@ jobs:
           test -f "$CXXSTL" || { echo "::error::libc++_shared.so missing"; exit 1; }
           # QTBUG-104580: Qt 5.15.2 androiddeployqt calls "llvm-readobj --libs",
           # an option removed in LLVM 14 (NDK r25+). Shim it: translate --libs
-          # into a DT_NEEDED listing via llvm-readelf.
-          if [ ! -f "$NDK_BIN/llvm-readobj.real" ]; then
-            mv "$NDK_BIN/llvm-readobj" "$NDK_BIN/llvm-readobj.real"
-            cat > "$NDK_BIN/llvm-readobj" << 'SHIM_EOF'
-          #!/bin/bash
-          # Shim: emulate removed "llvm-readobj --libs" (QTBUG-104580).
-          REAL_BIN="$(dirname "$0")/llvm-readobj.real"
-          READELF="$(dirname "$0")/llvm-readelf"
-          if [ "$1" = "--libs" ]; then
-            shift
-            # Print DT_NEEDED entries, one per line.
-            "$READELF" -d "$1" 2>/dev/null | sed -n 's/.*(NEEDED).*\[\(.*\)\].*/\1/p'
-            exit 0
-          fi
-          exec "$REAL_BIN" "$@"
-          SHIM_EOF
-            chmod +x "$NDK_BIN/llvm-readobj"
-          fi
+          # into a DT_NEEDED listing via llvm-readelf. Written via python3 to
+          # avoid heredoc quoting pitfalls.
+          export NDK_BIN
+          python3 - << 'PYEOF'
+          import os, stat
+          ndk_bin = os.environ["NDK_BIN"]
+          real = os.path.join(ndk_bin, "llvm-readobj.real")
+          shim = os.path.join(ndk_bin, "llvm-readobj")
+          readelf = os.path.join(ndk_bin, "llvm-readelf")
+          if not os.path.exists(real):
+              os.rename(shim, real)
+          with open(shim, "w") as f:
+              f.write("#!/bin/bash\n")
+              f.write('REAL_BIN="$(dirname "$0")/llvm-readobj.real"\n')
+              f.write('READELF="$(dirname "$0")/llvm-readelf"\n')
+              f.write('if [ "$1" = "--libs" ]; then\n')
+              f.write('  shift\n')
+              f.write('  "$READELF" -d "$1" 2>&1 | sed -n \'s/.*(NEEDED).*\\[\\(.*\\)\\].*/\\1/p\'\n')
+              f.write('  exit 0\n')
+              f.write('fi\n')
+              f.write('exec "$REAL_BIN" "$@"\n')
+          os.chmod(shim, 0o755)
+          print("shim installed")
+          PYEOF
+          echo "--- shim content ---"
+          cat "$NDK_BIN/llvm-readobj"
+          echo "--- shim test ---"
           "$NDK_BIN/llvm-readobj" --libs "$GITHUB_WORKSPACE/build-android-arm64/libgorp.so" | head -5
           rm -rf buildandroid/apk-build && mkdir -p buildandroid/apk-build
           cd buildandroid/apk-build
