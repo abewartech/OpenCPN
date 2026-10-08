@@ -43,9 +43,9 @@ INCLUDEPATH += $${OCPN_Base}/libs/nlohmann-json/include
 INCLUDEPATH += $${OCPN_Base}/libs/gui/include
 INCLUDEPATH += $${OCPN_Base}/libs/IXWebSocket
 INCLUDEPATH += $${OCPN_Base}/buildandroid/libexpat/include
-INCLUDEPATH += $${OCPN_Build}/_deps/rapidjson_src-src/include
-INCLUDEPATH += $${OCPN_Build}/_deps/json-src/include
-INCLUDEPATH += $${OCPN_Build}/include
+INCLUDEPATH += $${OCPN_Base}/$${OCPN_Build}/_deps/rapidjson_src-src/include
+INCLUDEPATH += $${OCPN_Base}/$${OCPN_Build}/_deps/json-src/include
+INCLUDEPATH += $${OCPN_Base}/$${OCPN_Build}/include
 
 
 LIBS += -L$${wxQt_Base}/$${wxQt_Build}/lib
