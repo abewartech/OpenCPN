@@ -118,7 +118,8 @@ jobs:
             "CONFIG+=release" \
             ../opencpn.pro
           make -j"$(nproc)"
-          test -f libopencpn.so
+          # Qt 5.15 multi-ABI appends the ABI to the lib name.
+          test -f libopencpn_arm64-v8a.so
 
       - name: androiddeployqt (package APK)
         env:
@@ -129,11 +130,14 @@ jobs:
         run: |
           QTDIR="$HOME/Qt/${{ env.QT_VERSION }}/android"
           cd buildandroid/apk-build
+          # Deployment-settings file carries the ABI suffix under multi-ABI Qt.
+          SETTINGS_JSON=android-libopencpn_arm64-v8a.so-deployment-settings.json
+          test -f "$SETTINGS_JSON" || { echo "::error::$SETTINGS_JSON not found"; ls; exit 1; }
           if [ -n "$APK_KEYSTORE_BASE64" ]; then
             echo "Keystore secret present: building signed release APK"
             echo "$APK_KEYSTORE_BASE64" | base64 -d > /tmp/release.keystore
             "$QTDIR/bin/androiddeployqt" \
-              --input android-libopencpn.so-deployment-settings.json \
+              --input "$SETTINGS_JSON" \
               --output android-build \
               --gradle \
               --release \
@@ -144,7 +148,7 @@ jobs:
           else
             echo "No keystore secret: building debug-signed APK"
             "$QTDIR/bin/androiddeployqt" \
-              --input android-libopencpn.so-deployment-settings.json \
+              --input "$SETTINGS_JSON" \
               --output android-build \
               --gradle
           fi
