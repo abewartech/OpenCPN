@@ -103,9 +103,31 @@ jobs:
           QTDIR="$HOME/Qt/${{ env.QT_VERSION }}/android"
           SUPPORT="$GITHUB_WORKSPACE/cache/OCPNAndroidCoreBuildSupport"
           NDK="$ANDROID_HOME/ndk/${{ env.NDK_VERSION }}"
+          NDK_BIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
           test -d "$SUPPORT/wxWidgets/libs/arm64/lib" || { echo "::error::wxQt libs missing in support bundle"; exit 1; }
           CXXSTL="$NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so"
           test -f "$CXXSTL" || { echo "::error::libc++_shared.so missing"; exit 1; }
+          # QTBUG-104580: Qt 5.15.2 androiddeployqt calls "llvm-readobj --libs",
+          # an option removed in LLVM 14 (NDK r25+). Shim it: translate --libs
+          # into a DT_NEEDED listing via llvm-readelf.
+          if [ ! -f "$NDK_BIN/llvm-readobj.real" ]; then
+            mv "$NDK_BIN/llvm-readobj" "$NDK_BIN/llvm-readobj.real"
+            cat > "$NDK_BIN/llvm-readobj" << 'SHIM_EOF'
+          #!/bin/bash
+          # Shim: emulate removed "llvm-readobj --libs" (QTBUG-104580).
+          REAL_BIN="$(dirname "$0")/llvm-readobj.real"
+          READELF="$(dirname "$0")/llvm-readelf"
+          if [ "$1" = "--libs" ]; then
+            shift
+            # Print DT_NEEDED entries, one per line.
+            "$READELF" -d "$1" 2>/dev/null | sed -n 's/.*(NEEDED).*\[\(.*\)\].*/\1/p'
+            exit 0
+          fi
+          exec "$REAL_BIN" "$@"
+          SHIM_EOF
+            chmod +x "$NDK_BIN/llvm-readobj"
+          fi
+          "$NDK_BIN/llvm-readobj" --libs "$GITHUB_WORKSPACE/build-android-arm64/libgorp.so" | head -5
           rm -rf buildandroid/apk-build && mkdir -p buildandroid/apk-build
           cd buildandroid/apk-build
           "$QTDIR/bin/qmake" \
