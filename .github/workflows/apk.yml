@@ -69,7 +69,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/Qt
-          key: qt-${{ env.QT_VERSION }}-android-arm64-v8a
+          key: qt-${{ env.QT_VERSION }}-android-multi-abi
 
       - name: Build native corelib (arm64)
         run: |
@@ -89,7 +89,9 @@ jobs:
           QTDIR="$HOME/Qt/${{ env.QT_VERSION }}/android"
           if [ ! -x "$QTDIR/bin/qmake" ]; then
             pip install -q aqtinstall
-            aqt install-qt linux android "${{ env.QT_VERSION }}" android_arm64_v8a -O "$HOME/Qt"
+            # Qt 5.15 ships Android as one multi-ABI package ("android"),
+            # not per-ABI packages like android_arm64_v8a.
+            aqt install-qt linux android "${{ env.QT_VERSION }}" android -O "$HOME/Qt"
           fi
           "$QTDIR/bin/qmake" -query QT_VERSION
           test -x "$QTDIR/bin/androiddeployqt"
