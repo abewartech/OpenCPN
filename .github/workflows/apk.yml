@@ -128,13 +128,17 @@ jobs:
           REAL_BIN="$(dirname "$0")/llvm-readobj.real"
           READELF="$(dirname "$0")/llvm-readelf"
           echo "SHIM CALLED: $0 | args: $*" >> /tmp/shim-debug.log
-          echo "SHIM $1=" >> /tmp/shim-debug.log
-          printf '%s' "$1" | od -c >> /tmp/shim-debug.log
-          if [ "$1" = "--libs" ]; then
-            shift
-            "$READELF" -d "$1" 2>/dev/null | grep -o '\[.*\]' | tr -d '[]'
-            exit 0
-          fi
+          # Check if ANY argument is --libs (androiddeployqt may pass other args first)
+          for arg in "$@"; do
+            if [ "$arg" = "--libs" ]; then
+              # Find the .so file (last arg that looks like a file)
+              for f in "$@"; do
+                case "$f" in *.so) SOFILE="$f";; esac
+              done
+              "$READELF" -d "$SOFILE" 2>/dev/null | grep -o '\[.*\]' | tr -d '[]'
+              exit 0
+            fi
+          done
           exec "$REAL_BIN" "$@"
           '''
           with open(shim, "w") as f:
