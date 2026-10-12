@@ -220,6 +220,14 @@ public class OCPNSettingsActivity extends PreferenceActivity
                        File folder = (File) bundle.get(FileChooserActivity.OUTPUT_FILE_OBJECT);
                        String name = bundle.getString(FileChooserActivity.OUTPUT_NEW_FILE_NAME);
                        filePath = folder.getAbsolutePath() + "/" + name;
+                   } else if(bundle.containsKey(FileChooserActivity.OUTPUT_SAF_URI)) {
+                       // SAF tree URI that could not be mapped to a direct
+                       // filesystem path (e.g. non-primary volume). Pass the
+                       // URI string through; the native chart scanner handles
+                       // SAF tree URIs (see IsSafTreeUri).
+                       fileCreated = false;
+                       filePath = bundle.getString(FileChooserActivity.OUTPUT_SAF_URI);
+                       parentDir = "";
                    } else {
                        fileCreated = false;
                        File file = (File) bundle.get(FileChooserActivity.OUTPUT_FILE_OBJECT);

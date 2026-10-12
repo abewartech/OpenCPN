@@ -16,15 +16,16 @@ SRC="$HERE/android/src"
 STUBS="$HERE/ci-stubs"
 OUT="$(mktemp -d)"
 
-# Java sources: app + vendored aFileDialog chooser library.
+# Java sources: app sources only.
 # The Play Licensing client (com.google.android.vending) is excluded: it
 # depends on Apache HttpClient (removed from the SDK in API 23) and is only
 # linked for opt-in commercial Play builds; stubs in ci-stubs cover the API
 # surface QtActivity references.
+# The vendored aFileDialog library (android/library/afilechooser) is excluded:
+# FileChooserActivity is now implemented via SAF in src/ar/com/daidalos/afiledialog/
+# (packaged by Gradle from src/), and the vendored copy would be a duplicate class.
 find "$SRC" -name '*.java' \
   | grep -v '/src/com/google/android/vending/' > "$OUT/sources.txt"
-find "$HERE/android/library/afilechooser/src/main/java" -name '*.java' \
-  >> "$OUT/sources.txt"
 find "$STUBS" -name '*.java' >> "$OUT/sources.txt"
 
 # Vendored binary deps (support-v4, play-services) go on the classpath.
@@ -35,9 +36,9 @@ done
 
 # Auto-generate R classes from referenced symbols:
 #   org.opencpn.opencpn.R  (app, from android/src)
-#   ar.com.daidalos.afiledialog.R  (chooser library)
+#   ar.com.daidalos.afiledialog.R  (SAF FileChooserActivity in src/)
 mkdir -p "$OUT/r/org/opencpn/opencpn" "$OUT/r/ar/com/daidalos/afiledialog"
-python3 - "$SRC" "$HERE/android/library/afilechooser/src/main/java" \
+python3 - "$SRC" "$SRC/ar/com/daidalos/afiledialog" \
         "$OUT/r/org/opencpn/opencpn/R.java" \
         "$OUT/r/ar/com/daidalos/afiledialog/R.java" <<'EOF'
 import os, re, sys
