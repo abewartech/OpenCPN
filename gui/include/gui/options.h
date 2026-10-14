@@ -62,7 +62,7 @@
 #include "ocpn_platform.h"
 #include "pluginmanager.h"  // FIXME: Refactor
 
-#ifndef __ANDROID__
+#if wxCHECK_VERSION(3, 2, 0)
 #define OCPN_OPTIONS_USE_LISTBOOK
 #endif
 
@@ -677,6 +677,8 @@ private:
   void OnAlertEnableButtonClick(wxCommandEvent &event);
   void OnAlertAudioEnableButtonClick(wxCommandEvent &event);
   void OnResetFont(wxCommandEvent &event);
+  void OnColorChange(wxSysColourChangedEvent &ev);
+  void OnColorChange();
 
   void UpdateTemplateTitleText();
   void CheckDeviceAccess(wxString &path);
