@@ -28,9 +28,18 @@
         android:allowBackup="true"
         android:supportsRtl="true">
 
+        <!--
+          Launcher activity is OCPNActivity, our subclass of Qt's QtActivity.
+          It adds ONLY the OpenCPN Java bridge (Settings, file chooser, SAF,
+          GPS queries, fullscreen, downloads, Bluetooth, migration, ...).
+          Do NOT point this back at stock QtActivity: the native layer calls
+          bridge methods on the activity object, and stock QtActivity does
+          not have them (every call would fail with NoSuchMethodError).
+          See OCPNActivity.java for the full story.
+        -->
         <activity
             android:configChanges="orientation|uiMode|screenLayout|screenSize|smallestScreenSize|density|locale|fontScale|keyboard|keyboardHidden|navigation"
-            android:name="org.qtproject.qt5.android.bindings.QtActivity"
+            android:name="org.opencpn.OCPNActivity"
             android:label="@string/app_name"
             android:screenOrientation="unspecified"
             android:exported="true"

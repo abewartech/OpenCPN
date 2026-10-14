@@ -3289,8 +3289,17 @@ int androidFileChooser(wxString *result, const wxString &initDir,
     }
     if (g_androidUtilHandler) {
       wxString activityResult;
-      activityResult = callActivityMethod_s4s("FileChooserDialog", initDir,
-                                              title, suggestion, wildcard);
+      // Directory picks go through the dedicated DirChooserDialog entry
+      // point (OCPNActivity): FileChooserDialog is for files. The two were
+      // separate methods in the original bridge; routing by dirOnly keeps
+      // chart-dir selection from opening a file picker.
+      if (dirOnly) {
+        activityResult =
+            callActivityMethod_s2s("DirChooserDialog", initDir, title);
+      } else {
+        activityResult = callActivityMethod_s4s("FileChooserDialog", initDir,
+                                                title, suggestion, wildcard);
+      }
 
       if (activityResult == _T("OK")) {
         return wxID_OK;
