@@ -180,8 +180,11 @@ public class OCPNActivity extends org.qtproject.qt5.android.bindings.QtActivity 
     // Lifecycle: Qt owns the Qt part via super.*; we add the OpenCPN part.
     // ------------------------------------------------------------------
 
+    // NB: Qt's QtActivity declares onCreate() PUBLIC (unlike Activity's
+    // protected one); the override must be public too or javac rejects it
+    // ("attempting to assign weaker access privileges").
     @Override
-    protected void onCreate(Bundle savedInstanceState) {
+    public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         nativeLib = new OCPNNativeLib();
     }
@@ -1267,14 +1270,13 @@ public class OCPNActivity extends org.qtproject.qt5.android.bindings.QtActivity 
             };
             IntentFilter filter = new IntentFilter(
                     DownloadManager.ACTION_DOWNLOAD_COMPLETE);
-            // Targeting API 34+: context-registered receivers must declare
-            // exportedness.
-            if (Build.VERSION.SDK_INT >= 33) {
-                registerReceiver(downloadBCReceiver, filter,
-                        Context.RECEIVER_NOT_EXPORTED);
-            } else {
-                registerReceiver(downloadBCReceiver, filter);
-            }
+            // Plain 2-arg registerReceiver, deliberately: the 3-arg
+            // (receiver, filter, flags) overload and RECEIVER_NOT_EXPORTED
+            // only exist since API 33, but the APK compiles against API 30.
+            // System broadcasts (like ACTION_DOWNLOAD_COMPLETE) are exempt
+            // from the API 34+ exportedness requirement, so this stays
+            // correct at runtime on all API levels.
+            registerReceiver(downloadBCReceiver, filter);
         }
 
         mutex = new Semaphore(0);
