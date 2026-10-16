@@ -225,7 +225,7 @@ jobs:
           if [ -n "$APK_KEYSTORE_BASE64" ]; then
             echo "Keystore secret present: building signed release APK"
             echo "$APK_KEYSTORE_BASE64" | base64 -d > /tmp/release.keystore
-            "$QTDIR/bin/androiddeployqt" \
+            if ! "$QTDIR/bin/androiddeployqt" \
               --input "$SETTINGS_JSON" \
               --output android-build \
               --android-platform "android-${{ env.ANDROID_API }}" \
@@ -233,17 +233,29 @@ jobs:
               --release \
               --sign /tmp/release.keystore "$APK_KEY_ALIAS" \
               --storepass "$APK_KEYSTORE_PASSWORD" \
-              --keypass "${APK_KEY_PASSWORD:-$APK_KEYSTORE_PASSWORD}" || echo "ANDROIDDEPLOYQT_EXIT=$?"
+              --keypass "${APK_KEY_PASSWORD:-$APK_KEYSTORE_PASSWORD}"; then
+              echo "::error::androiddeployqt (release) failed"
+              exit 1
+            fi
             rm -f /tmp/release.keystore
           else
             echo "No keystore secret: building debug-signed APK"
-            "$QTDIR/bin/androiddeployqt" \
+            if ! "$QTDIR/bin/androiddeployqt" \
               --input "$SETTINGS_JSON" \
               --output android-build \
               --android-platform "android-${{ env.ANDROID_API }}" \
-              --gradle || echo "ANDROIDDEPLOYQT_EXIT=$?"
+              --gradle; then
+              echo "::error::androiddeployqt (debug) failed"
+              exit 1
+            fi
           fi
           find android-build -name "*.apk"
+
+      - name: Sanity-check APK
+        run: |
+          APK=$(find buildandroid/apk-build/android-build/build/outputs/apk -name "*.apk" | head -1)
+          test -n "$APK" || { echo "::error::no APK produced by androiddeployqt"; exit 1; }
+          bash buildandroid/apk-sanity-check.sh "$APK"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
