@@ -1,0 +1,52 @@
+# Trivy security scan — scans the repository for vulnerabilities,
+# leaked secrets and IaC/config misconfigurations and uploads the
+# results (SARIF) to the GitHub Security tab.
+#
+# Report-only on purpose: findings do NOT fail the build
+# (exit-code '0'). Once the findings backlog is triaged, flip
+# exit-code to '1' to make CRITICAL/HIGH findings gate merges.
+
+name: Trivy security scan
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  schedule:
+    # Mondays ~03:17 UTC — catches newly disclosed CVEs in dependencies
+    # even when nothing was pushed.
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  trivy:
+    name: Trivy (fs scan)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run Trivy scanner
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          scanners: 'vuln,secret,misconfig'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          exit-code: '0'
+          # Vendored IXWebSocket test fixtures: self-signed test
+          # certificates (*.pem private keys) that are not real secrets.
+          skip-dirs: 'libs/IXWebSocket/test'
+
+      - name: Upload Trivy results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v4
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
